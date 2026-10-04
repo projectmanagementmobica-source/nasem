@@ -1,6 +1,6 @@
 /* Offline shell. The app itself is network-first so updates arrive on the next open;
    fonts and the file-reading libraries are cached after first use. AI calls are never cached. */
-const CACHE = "nasem-v21";
+const CACHE = "nasem-v24";
 const SHELL = ["./", "./index.html", "./runtime.js", "./manifest.webmanifest", "./icon-192.png", "./icon-512.png"];
 
 self.addEventListener("install", (e) => {

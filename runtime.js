@@ -382,7 +382,9 @@
   // ---------------------------------------------------------------- cloud voices (Azure neural)
   // Real Egyptian-Arabic voices (Salma / Shakir) + English, much clearer than on-device voices.
   const TTS_KEY = "nasem-app-tts";
-  const TTS_DEFAULTS = { provider: "device", azureKey: "", azureRegion: "", arVoice: "ar-EG-SalmaNeural", enVoice: "en-US-JennyNeural" };
+  const TTS_DEFAULTS = { provider: "device", azureKey: "", azureRegion: "", arVoice: "ar-EG-SalmaNeural", enVoice: "en-US-JennyNeural",
+    geminiModel: "gemini-3.1-flash-tts-preview", geminiVoice: "Kore" };
+  const GEMINI_VOICES = [["Kore", "Kore (ست، واضح)"], ["Aoede", "Aoede (ست، دافي)"], ["Puck", "Puck (راجل، حيوي)"], ["Charon", "Charon (راجل، هادي)"]];
   const VOICES = {
     ar: [["ar-EG-SalmaNeural", "سلمى (مصري، ست)"], ["ar-EG-ShakirNeural", "شاكر (مصري، راجل)"]],
     en: [["en-US-JennyNeural", "Jenny (US, female)"], ["en-US-GuyNeural", "Guy (US, male)"], ["en-GB-SoniaNeural", "Sonia (UK, female)"], ["en-GB-RyanNeural", "Ryan (UK, male)"]],
@@ -412,16 +414,95 @@
     if (audioCache.size > 30) { const [k, u] = audioCache.entries().next().value; URL.revokeObjectURL(u); audioCache.delete(k); }
     return url;
   }
+  // Gemini speech: same key as the chat, Egyptian Arabic by instruction. Returns raw PCM -> wrap as WAV.
+  function pcmToWav(b64, rate) {
+    const pcm = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+    const buf = new ArrayBuffer(44 + pcm.length), v = new DataView(buf);
+    const w = (o, s) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
+    w(0, "RIFF"); v.setUint32(4, 36 + pcm.length, true); w(8, "WAVE"); w(12, "fmt "); v.setUint32(16, 16, true);
+    v.setUint16(20, 1, true); v.setUint16(22, 1, true); v.setUint32(24, rate, true); v.setUint32(28, rate * 2, true);
+    v.setUint16(32, 2, true); v.setUint16(34, 16, true); w(36, "data"); v.setUint32(40, pcm.length, true);
+    new Uint8Array(buf, 44).set(pcm);
+    return new Blob([buf], { type: "audio/wav" });
+  }
+  const MOODS = {
+    warm: ["اتكلم زي صاحب مصري ودود في التلاتينات، بنبرة دافية ومبتسمة، ووقفات طبيعية بين الجمل، مش زي مذيع ولا زي آلة", "Speak like a warm, friendly person in their thirties, smiling, with natural pauses, not like a newsreader"],
+    happy: ["اتكلم بفرحة حقيقية وحماس خفيف، زي حد فرحان لصاحبه، بلهجة مصرية طبيعية", "Speak with genuine joy, like someone happy for a friend"],
+    calm: ["اتكلم بهدوء وثبات وجدية، واضح وبطيء شوية، صوت يطمّن، بلهجة مصرية", "Speak calmly and steadily, clear and a little slow, reassuring"],
+    concerned: ["اتكلم باهتمام وقلق خفيف، زي حد بيحذّر صاحبه بحب، بلهجة مصرية طبيعية", "Speak with gentle concern, like warning a friend you care about"],
+  };
+  async function geminiAudio(text, lang, rate, mood = "warm") {
+    const c = getTTS(), g = getConfig().gemini;
+    if (!g.key) throw err("no_tts_key");
+    const style = (MOODS[mood] || MOODS.warm)[lang === "en" ? 1 : 0];
+    const pace = rate < 0.95 ? "، وبراحة شوية" : rate > 1.05 ? "، وبسرعة شوية" : "";
+    const key = `gem|${c.geminiVoice}|${rate}|${mood}|${text}`;
+    if (audioCache.has(key)) return audioCache.get(key);
+    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(c.geminiModel || TTS_DEFAULTS.geminiModel)}:generateContent`, {
+      method: "POST", headers: { "content-type": "application/json", "x-goog-api-key": g.key },
+      body: JSON.stringify({
+        contents: [{ role: "user", parts: [{ text: `${style}${pace}:\n${text.slice(0, 1500)}` }] }],
+        generationConfig: { responseModalities: ["AUDIO"], speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: c.geminiVoice || "Kore" } } } },
+      }),
+    });
+    if (!res.ok) throw await httpErr(res);
+    const d = await res.json();
+    const part = ((d.candidates && d.candidates[0] && d.candidates[0].content && d.candidates[0].content.parts) || []).find((p) => p.inlineData || p.inline_data);
+    const inl = part && (part.inlineData || part.inline_data);
+    if (!inl || !inl.data) throw err("upstream_error", "no audio returned");
+    const mt = inl.mimeType || inl.mime_type || "";
+    const rateHz = parseInt((mt.match(/rate=(\d+)/) || [])[1], 10) || 24000;
+    const url = URL.createObjectURL(/wav|mpeg|mp3|ogg/.test(mt) ? b64ToBlob(inl.data, mt) : pcmToWav(inl.data, rateHz));
+    audioCache.set(key, url);
+    return url;
+  }
+
+  function sentences(text) {   // short chunks -> first words start fast; merge tiny ones
+    const parts = String(text).split(/(?<=[.!؟?،\n])\s+/).filter(Boolean), out = []; let cur = "";
+    for (const p of parts) { if (cur && (cur + " " + p).length > 160) { out.push(cur); cur = p; } else cur = cur ? cur + " " + p : p; }
+    if (cur) out.push(cur);
+    return out.length ? out : [String(text)];
+  }
+  let seq = 0, seqActive = false;
+  const playUrl = (url) => new Promise((resolve, reject) => {
+    player.onended = () => resolve(); player.onerror = () => reject(err("upstream_error", "audio playback failed"));
+    player.pause(); player.src = url; player.play().catch(reject);
+  });
+
   const tts = {
-    VOICES, get: getTTS, set: setTTS,
+    VOICES, GEMINI_VOICES, get: getTTS, set: setTTS,
+    /* Prefetch short phrases (e.g. call fillers) so they can play instantly later. */
+    async prefetch(list, lang = "ar") { if (getTTS().provider !== "gemini") return; for (const p of list) { try { await geminiAudio(p, lang, 1, "warm"); } catch (e) { return; } } },
+    playCached(text, lang = "ar") {
+      const c = getTTS(), url = audioCache.get(`gem|${c.geminiVoice}|1|warm|${text}`);
+      if (!url || seqActive || !player) return false;
+      player.pause(); player.src = url; player.play().catch(() => {}); return true;
+    },
     enabled() {
       const c = getTTS();
       if (!player) return false;
       if (c.provider === "server") return !!getGW().access;
+      if (c.provider === "gemini") return !!getConfig().gemini.key;
       return c.provider === "azure" && !!c.azureKey && !!c.azureRegion;
     },
-    async speak(text, lang, rate = 1) {
+    async speak(text, lang, rate = 1, mood = "warm") {
       const c = getTTS();
+      if (c.provider === "gemini") {   // play sentence by sentence, fetching the next while the current one plays
+        const my = ++seq, parts = sentences(text);
+        seqActive = true;
+        try {
+          let next = geminiAudio(parts[0], lang, rate, mood);
+          for (let i = 0; i < parts.length; i++) {
+            const url = await next;
+            if (my !== seq) return;
+            next = i + 1 < parts.length ? geminiAudio(parts[i + 1], lang, rate, mood) : null;
+            if (next) next.catch(() => {});
+            await playUrl(url);
+            if (my !== seq) return;
+          }
+        } finally { if (my === seq) seqActive = false; }
+        return;
+      }
       let url;
       if (c.provider === "server") {
         const voice = lang === "en" ? c.enVoice : c.arVoice, key = `srv|${voice}|${rate}|${text}`;
@@ -431,11 +512,12 @@
           if (!res.ok) throw err(res.status === 503 ? "tts_not_configured" : "upstream_error");
           url = URL.createObjectURL(await res.blob()); audioCache.set(key, url);
         }
-      } else url = await azureAudio(text, lang, rate);
+      } else if (c.provider === "gemini") url = await geminiAudio(text, lang, rate);
+      else url = await azureAudio(text, lang, rate);
       player.pause(); player.src = url; await player.play();
     },
-    stop() { if (player) player.pause(); },
-    isPlaying() { return !!player && !player.paused && !player.ended; },
+    stop() { seq++; seqActive = false; if (player) player.pause(); },
+    isPlaying() { return seqActive || (!!player && !player.paused && !player.ended); },
     unlock() {   // play a silent clip inside the first tap so later replies may autoplay
       if (!player || player.dataset.unlocked) return;
       player.dataset.unlocked = "1";

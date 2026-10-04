@@ -315,6 +315,8 @@ main{overflow-x:hidden}
 .dec-opt.chosen{border-color:var(--breeze);background:var(--breeze-soft)}
 .dec-opt li.pro{color:var(--breeze)} .dec-opt li.con{color:var(--danger)}
 
+.seg.seg-wrap{flex-wrap:wrap}.seg.seg-wrap button{flex:1 1 45%}
+
 /* composer */
 .composer{padding:10px 16px 14px;display:flex;gap:10px;align-items:flex-end;background:var(--paper);border-top:1px solid var(--line)}
 .composer textarea{flex:1;resize:none;overflow-y:hidden;border:1px solid var(--line);background:var(--surface);border-radius:22px;padding:11px 16px;max-height:120px;min-height:46px;line-height:1.5}
@@ -718,6 +720,7 @@ Reply with ONLY one JSON object (no prose, no markdown) with exactly these keys:
 - New facts: confirm briefly what you understood. New commitments: ask the user to confirm adding them. Changed facts vs <known_memories>: mention the change and ask to confirm.
 - If several items await approval and the user's intent is unclear, ask which one they mean.
 - agent_reply is read aloud: write times and dates the way people say them ("بكرة الساعة 5 العصر", not "17:00"), and no symbols or links.
+- Sound like a real Egyptian friend talking, not a system: short spoken sentences, natural words like "طيب"، "بص"، "تمام"، "ماشي" when they fit, a little warmth. Use the user's name only now and then (never every reply). Never write robotic phrases like "تم الحفظ بنجاح" or "يرجى"; say "سجلتها" or "تمام، هفكرك". Vary your wording; don't open every reply the same way.
 
 ## Understanding speech
 The message often comes from voice dictation. Expect: missing punctuation, misspellings, numbers written as words ("خمسة ونص")، English words written in Arabic letters ("الميتنج"، "الديدلاين"), Egyptian colloquial, and misheard names.
@@ -1769,7 +1772,7 @@ function speak(text, force = false, report = false){
   if (cloud){
     if (hasTTS) speechSynthesis.cancel();
     cloudPending = true;
-    window.NASEM_APP.tts.speak(clean, lang, ttsPrefs.rate).then(() => { ttsHealth = "ok"; }).finally(() => { cloudPending = false; }).catch(e => {
+    window.NASEM_APP.tts.speak(clean, lang, ttsPrefs.rate, speechMood(clean)).then(() => { ttsHealth = "ok"; }).finally(() => { cloudPending = false; }).catch(e => {
       console.warn("cloud voice failed, using the phone voice", e);
       if (report) toast(e && e.code === "bad_key" ? "مفتاح الصوت اترفض، هكمّل بصوت الموبايل." : "الصوت المصري مش متاح دلوقتي، هكمّل بصوت الموبايل.");
       speakDevice(clean, lang, report);
@@ -1777,6 +1780,13 @@ function speak(text, force = false, report = false){
     return;
   }
   speakDevice(clean, lang, report);
+}
+/* The voice's tone follows the moment: calm in emergencies, concerned for warnings, happy for good news. */
+function speechMood(t){
+  if (/123|إسعاف|اسعاف|طوارئ|طوارىء/.test(t)) return "calm";
+  if (/نصب|احتيال|خلي بالك|خد بالك|حذر|مشبوه/.test(t)) return "concerned";
+  if (/مبروك|برافو|ألف مبروك|تهانينا|هايل|ممتاز|🎉/.test(t)) return "happy";
+  return "warm";
 }
 function speakDevice(clean, lang, report){
   if (!hasTTS){ if (report) toast(TTS_HELP.unsupported); return; }
@@ -2372,8 +2382,14 @@ function cloudVoiceSettings(){
     s2.addEventListener("change", () => { onPick(s2.value); save(); }); return s2; };
   return h("div",{class:"ai-prov", style:"margin-bottom:10px"},
     h("div",{class:"section-title", style:"margin-top:0"}, "صوت مصري واضح (Azure)"),
-    h("div",{class:"seg"}, [["device","صوت الموبايل"],["server","مصري من السيرفر"],["azure","مصري بمفتاحي"]].map(([v, t]) =>
+    h("div",{class:"seg seg-wrap"}, [["gemini","Gemini (مجاني)"],["device","الموبايل"],["server","السيرفر"],["azure","Azure"]].map(([v, t]) =>
       h("button",{"aria-pressed": String(c.provider === v), onclick:() => { c.provider = v; save(); openSettings(); }}, t))),
+    c.provider === "gemini" ? h("div",{},
+      h("div",{class:"pref-label", style:"margin-top:8px"}, "الصوت"), sel(T.GEMINI_VOICES, c.geminiVoice || "Kore", v => { c.geminiVoice = v; }),
+      inp("موديل الصوت", c.geminiModel || "gemini-3.1-flash-tts-preview", v => { c.geminiModel = v; }, "text", "gemini-3.1-flash-tts-preview"),
+      h("div",{class:"att-note"}, window.NASEM_APP.getConfig().gemini.key
+        ? "بيستخدم نفس مفتاح Gemini بتاع الشات، وبيتكلم مصري طبيعي. الشريحة المجانية ليها حد يومي، ولو خلص بيرجع لصوت الموبايل لوحده."
+        : "محتاج مفتاح Gemini الأول (مصدر الذكاء ← مفاتيحي ← Gemini).")) : null,
     c.provider === "server" ? h("div",{},
       h("div",{class:"pref-label", style:"margin-top:8px"}, "الصوت المصري"), sel(T.VOICES.ar, c.arVoice, v => { c.arVoice = v; }),
       h("div",{class:"pref-label", style:"margin-top:8px"}, "English voice"), sel(T.VOICES.en, c.enVoice, v => { c.enVoice = v; }),
@@ -2388,7 +2404,7 @@ function cloudVoiceSettings(){
 
 /* ---------------- identity: "تعرّف على نسيم" ---------------- */
 const APP = {
-  name: "نسيم", nameLatin: "NASEM AI", version: "إصدار 1.7 (تطبيق)",
+  name: "نسيم", nameLatin: "NASEM AI", version: "إصدار 1.9 (تطبيق)",
   owner: "أشرف قاسم",
   year: 2026,
   can: [
@@ -2461,7 +2477,7 @@ function aiSettings(){
     h("button",{class:"btn ghost", onclick: async e => {
       const b = e.currentTarget; b.textContent = "بجرّب…";
       try{ await A.test(id); b.textContent = "شغال ✓"; }
-      catch(x){ b.textContent = x.code === "bad_key" ? "المفتاح مرفوض" : x.code === "no_key" ? "حط المفتاح الأول" : x.model ? `الموديل "${x.model}" مش شغال` : "مش شغال (" + (x.code || "خطأ") + ")"; }
+      catch(x){ b.textContent = x.code === "bad_key" ? "المفتاح مرفوض" : x.code === "no_key" ? "حط المفتاح الأول" : x.code === "rate_limited" ? "وصلت للحد. استنى دقيقة وجرّب" : x.model ? `الموديل "${x.model}" مش شغال (${x.code || "خطأ"}${/\b(40[034]|429|5\d\d)\b/.test(x.message || "") ? " " + (x.message.match(/\b(40[034]|429|5\d\d)\b/) || [""])[0] : ""})` : "مش شغال (" + (x.code || "خطأ") + ")"; }
     }}, "جرّب الاتصال"));
   const G = A.gateway, g = G.get();
   const modeSeg = h("div",{class:"seg"}, [["gateway","سيرفر نسيم"],["keys","مفاتيحي (تجربة)"]].map(([v, t]) =>
@@ -3117,6 +3133,7 @@ let cloudPending = false;
 /* Call mode: listen -> think -> speak (Egyptian voice) -> listen again. Every turn goes through the
    normal chat path, so masking, approvals and memory work exactly like typing. */
 let call = null;
+const CALL_FILLERS = ["طيب، ثانية واحدة.", "ماشي، بشوف أهو.", "تمام، لحظة."];
 function callAvailable(){ return !!SR && !micBlocked; }
 function openCall(){
   if (!S.consent){ openConsent(); return; }
@@ -3127,6 +3144,7 @@ function openCall(){
     sheetBack.hidden = false; return;
   }
   unlockTTS();
+  if (window.NASEM_APP && window.NASEM_APP.tts && window.NASEM_APP.tts.prefetch) window.NASEM_APP.tts.prefetch(CALL_FILLERS).catch(() => {});
   call = {state:"idle", lines:[], misses:0, active:true, partial:"", rec:null};
   renderCall(); callListen();
 }
@@ -3153,7 +3171,10 @@ function callListen(){
     const t = (finalText || call.partial || "").trim();
     if (!t){ call.misses++; if (call.misses >= 3){ call.state = "paused"; renderCall(); return; } callListen(); return; }
     call.misses = 0; call.lines.push({who:"you", text:t}); call.state = "thinking"; renderCall();
+    const A2 = window.NASEM_APP;
+    const filler = setTimeout(() => { if (A2 && A2.tts && A2.tts.playCached) A2.tts.playCached(CALL_FILLERS[Math.floor(Math.random() * CALL_FILLERS.length)]); }, 1200);
     await send(t, "voice");
+    clearTimeout(filler);
     if (!call || !call.active) return;
     const last = lastAgentMessage(); if (last) call.lines.push({who:"nasem", text:last.text});
     call.state = "speaking"; renderCall();
