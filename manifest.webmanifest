@@ -1,0 +1,67 @@
+{
+  "name": "نسيم — مساعدك الشخصي",
+  "short_name": "نسيم",
+  "description": "ذاكرتك والتزاماتك، بصوتك. بيقترح، وإنت اللي بتقرر.",
+  "id": "./",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "dir": "rtl",
+  "lang": "ar",
+  "background_color": "#E9F0F2",
+  "theme_color": "#1F7A8C",
+  "categories": [
+    "productivity",
+    "lifestyle"
+  ],
+  "icons": [
+    {
+      "src": "icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "share_target": {
+    "action": "./share",
+    "method": "POST",
+    "enctype": "multipart/form-data",
+    "params": {
+      "title": "title",
+      "text": "text",
+      "url": "url",
+      "files": [
+        {
+          "name": "files",
+          "accept": [
+            "image/*",
+            "audio/*",
+            "application/pdf",
+            ".pdf",
+            "text/plain",
+            ".txt",
+            ".docx",
+            ".xlsx",
+            ".csv",
+            ".opus",
+            ".ogg",
+            ".m4a"
+          ]
+        }
+      ]
+    }
+  }
+}
