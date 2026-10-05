@@ -20,9 +20,10 @@
     webSearch: true,
     anthropic: { key: "", main: "claude-sonnet-5", quick: "claude-haiku-4-5-20251001" },
     openai: { key: "", main: "", quick: "", imageModel: "" },
-    gemini: { key: "", main: "", quick: "", imageModel: "" },
+    gemini: { key: "", main: "gemini-3.5-flash", quick: "", imageModel: "" },
+    groq: { key: "", main: "openai/gpt-oss-120b", quick: "llama-3.3-70b-versatile" },
   };
-  const PROVIDER_NAMES = { anthropic: "Claude", openai: "ChatGPT", gemini: "Gemini" };
+  const PROVIDER_NAMES = { anthropic: "Claude", openai: "ChatGPT", gemini: "Gemini", groq: "Groq" };
 
   function getConfig() {
     let c = {};
@@ -31,7 +32,8 @@
       ...DEFAULTS, ...c,
       anthropic: { ...DEFAULTS.anthropic, ...(c.anthropic || {}) },
       openai: { ...DEFAULTS.openai, ...(c.openai || {}) },
-      gemini: { ...DEFAULTS.gemini, ...(c.gemini || {}) },
+      gemini: { ...DEFAULTS.gemini, ...(c.gemini || {}), main: ((c.gemini || {}).main || "").trim() || DEFAULTS.gemini.main },
+      groq: { ...DEFAULTS.groq, ...(c.groq || {}), main: ((c.groq || {}).main || "").trim() || DEFAULTS.groq.main },
     };
   }
   function setConfig(c) { localStorage.setItem(CFG_KEY, JSON.stringify(c)); }
@@ -58,8 +60,23 @@
     if (a < 0 || b <= a) throw err("invalid_json", "no JSON object in the answer");
     try { return JSON.parse(t.slice(a, b + 1)); } catch (e) { throw err("invalid_json", e.message); }
   }
+  /* Next midnight in Pacific time = when Gemini's daily free quota resets. */
+  function nextPacificMidnight() {
+    const parts = Object.fromEntries(new Intl.DateTimeFormat("en-US", { timeZone: "America/Los_Angeles", hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" })
+      .formatToParts(new Date()).filter((p) => p.type !== "literal").map((p) => [p.type, +p.value]));
+    const secs = ((parts.hour % 24) * 3600) + parts.minute * 60 + parts.second;
+    return Date.now() + (86400 - secs) * 1000;
+  }
   async function httpErr(res) {
-    if (res.status === 429) return err("rate_limited");
+    if (res.status === 429) {
+      let body = null; try { body = await res.json(); } catch (e) {}
+      const details = (body && body.error && body.error.details) || [];
+      const quotaIds = details.filter((d) => /QuotaFailure/.test(d["@type"] || "")).flatMap((d) => (d.violations || []).map((v) => v.quotaId || ""));
+      const retry = details.find((d) => /RetryInfo/.test(d["@type"] || ""));
+      const retryAfter = retry ? parseFloat(String(retry.retryDelay || "").replace("s", "")) || null : (parseFloat(res.headers && res.headers.get && res.headers.get("retry-after")) || null);
+      if (quotaIds.some((q) => /PerDay|Daily/i.test(q))) return Object.assign(err("quota_daily", "daily free quota used up"), { resetAt: nextPacificMidnight() });
+      return Object.assign(err("rate_limited"), { retryAfter });
+    }
     if (res.status === 401 || res.status === 403) return err("bad_key", "key rejected");
     if (res.status === 413) return err("prompt_too_large");
     let msg = ""; try { msg = (await res.text()).slice(0, 300); } catch (e) {}
@@ -127,7 +144,20 @@
     return parseJSONText(((cand && cand.content && cand.content.parts) || []).map((p) => p.text || "").join(""));
   }
 
-  const CALL = { anthropic: callAnthropic, openai: callOpenAI, gemini: callGemini };
+  // Groq: free tier, no card, OpenAI-compatible. Text only (no images / audio here).
+  async function callGroq(cfg, model, prompt, { signal, images }) {
+    if (images && images.length) throw err("upstream_error", "groq: images not supported here");
+    const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+      method: "POST", signal,
+      headers: { "content-type": "application/json", authorization: "Bearer " + cfg.key },
+      body: JSON.stringify({ model, messages: [{ role: "user", content: prompt + JSON_ONLY }], response_format: { type: "json_object" }, temperature: 0.4 }),
+    });
+    if (!res.ok) throw await httpErr(res);
+    const d = await res.json();
+    return parseJSONText((d.choices && d.choices[0] && d.choices[0].message && d.choices[0].message.content) || "");
+  }
+
+  const CALL = { anthropic: callAnthropic, openai: callOpenAI, gemini: callGemini, groq: callGroq };
 
   function usable(cfg) {
     const order = [cfg.primary, ...Object.keys(CALL).filter((p) => p !== cfg.primary)];
@@ -245,6 +275,50 @@
     return !!c.gemini.key && !!(c.gemini.main || c.gemini.quick);
   }
 
+  // Each free Gemini model has its own small daily quota. When one is used up, move to the next.
+  const GEMINI_FALLBACKS = ["gemini-3.5-flash", "gemini-2.5-flash", "gemini-2.5-flash-lite"];
+  const EXH_KEY = "nasem-exhausted", USE_KEY = "nasem-usage";
+  const laDay = () => new Intl.DateTimeFormat("en-CA", { timeZone: "America/Los_Angeles" }).format(new Date());
+  function exhausted() { let m = {}; try { m = JSON.parse(localStorage.getItem(EXH_KEY) || "{}"); } catch (e) {} const now = Date.now(); for (const k of Object.keys(m)) if (m[k] < now) delete m[k]; return m; }
+  function markExhausted(model, until) { const m = exhausted(); m[model] = until || nextPacificMidnight(); localStorage.setItem(EXH_KEY, JSON.stringify(m)); }
+  function countUse(provider, model) {
+    let u = {}; try { u = JSON.parse(localStorage.getItem(USE_KEY) || "{}"); } catch (e) {}
+    if (u.day !== laDay()) u = { day: laDay(), total: 0, models: {} };
+    u.total++; u.models[`${provider}:${model}`] = (u.models[`${provider}:${model}`] || 0) + 1;
+    localStorage.setItem(USE_KEY, JSON.stringify(u));
+  }
+  function usage() { let u = {}; try { u = JSON.parse(localStorage.getItem(USE_KEY) || "{}"); } catch (e) {} return u.day === laDay() ? u : { day: laDay(), total: 0, models: {} }; }
+  const sleep = (ms, signal) => new Promise((res, rej) => { const t2 = setTimeout(res, ms); if (signal) signal.addEventListener("abort", () => { clearTimeout(t2); rej(err("cancelled")); }, { once: true }); });
+
+  async function callWithModels(p, pc, models, prompt, o) {
+    let last = null; const ex = exhausted(), missing = new Set();
+    const list = [...new Set(models.filter(Boolean))];
+    const fresh = list.filter((m) => !ex[m]);
+    if (!fresh.length) { const soonest = Math.min(...list.map((m) => ex[m] || nextPacificMidnight())); throw Object.assign(err("quota_daily"), { resetAt: soonest }); }
+    for (const m of fresh) {
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+          const out = await CALL[p](pc, m, prompt, o);
+          countUse(p, m); state.lastModel = m;
+          return out;
+        } catch (e) {
+          if ((e && e.name === "AbortError") || (o.signal && o.signal.aborted)) throw err("cancelled");
+          if (e && e.code === "invalid_json") throw e;
+          last = e;
+          if (e && e.code === "rate_limited" && attempt === 0 && e.retryAfter && e.retryAfter <= 15) { await sleep(e.retryAfter * 1000 + 300, o.signal); continue; }
+          if (e && e.code === "quota_daily") { markExhausted(m, e.resetAt); break; }
+          if (e && e.code === "upstream_error" && /\b404\b/.test(e.message || "")) { missing.add(m); break; }   // model doesn't exist: try the next one
+          if (e && (e.code === "rate_limited" || e.code === "upstream_error")) break;          // try the next model
+          throw e;                                                                              // bad key etc.
+        }
+      }
+    }
+    const ex2 = exhausted(), real = fresh.filter((m) => !missing.has(m));
+    // Every model that exists is out for today -> say so honestly (models that don't exist don't count).
+    if (real.length && real.every((m) => ex2[m])) throw Object.assign(err("quota_daily"), { resetAt: Math.min(...real.map((m) => ex2[m])) });
+    throw last || err("llm_unavailable");
+  }
+
   async function json(prompt, opts = {}) {
     const cfg = getConfig();
     if (opts.audio && cfg.mode === "gateway") return viaGateway(prompt, opts);
@@ -267,21 +341,23 @@
     for (const p of list) {
       const pc = cfg[p];
       const model = pc[tier] || pc.main || pc.quick;
+      const models = p === "gemini" ? [model, pc.main, pc.quick, ...GEMINI_FALLBACKS] : p === "groq" ? [model, pc.main, pc.quick] : [model];
       try {
         const ws = !!(opts.webSearch && cfg.webSearch);
         let out;
         try {
-          out = await CALL[p](pc, model, prompt, { images: imgs, signal: opts.signal, webSearch: ws });
+          out = await callWithModels(p, pc, models, prompt, { images: imgs, signal: opts.signal, webSearch: ws });
         } catch (e1) {
           // Free tiers may not include web search: answer without it rather than fail.
-          if (!ws || (e1 && (e1.name === "AbortError" || e1.code === "invalid_json"))) throw e1;
-          out = await CALL[p](pc, model, prompt, { images: imgs, signal: opts.signal, webSearch: false });
+          if (!ws || (e1 && (e1.name === "AbortError" || ["invalid_json", "quota_daily", "cancelled"].includes(e1.code)))) throw e1;
+          out = await callWithModels(p, pc, models, prompt, { images: imgs, signal: opts.signal, webSearch: false });
         }
         state.lastProvider = p;
         return out;
       } catch (e) {
         if ((e && e.name === "AbortError") || (opts.signal && opts.signal.aborted)) throw err("cancelled");
         if (e && e.code === "invalid_json") throw e;         // the app re-asks with a repair note
+        if (e && e.code === "cancelled") throw e;
         last = e;                                           // network / key / quota -> try the next provider
       }
     }
@@ -389,7 +465,12 @@
     ar: [["ar-EG-SalmaNeural", "سلمى (مصري، ست)"], ["ar-EG-ShakirNeural", "شاكر (مصري، راجل)"]],
     en: [["en-US-JennyNeural", "Jenny (US, female)"], ["en-US-GuyNeural", "Guy (US, male)"], ["en-GB-SoniaNeural", "Sonia (UK, female)"], ["en-GB-RyanNeural", "Ryan (UK, male)"]],
   };
-  function getTTS() { let c = {}; try { c = JSON.parse(localStorage.getItem(TTS_KEY) || "{}"); } catch (e) {} return { ...TTS_DEFAULTS, ...c }; }
+  function getTTS() {
+    let c = {}; try { c = JSON.parse(localStorage.getItem(TTS_KEY) || "{}"); } catch (e) {}
+    const out = { ...TTS_DEFAULTS, ...c };
+    if (!c.provider && getConfig().gemini.key) out.provider = "gemini";   // never chosen -> the human voice
+    return out;
+  }
   function setTTS(c) { localStorage.setItem(TTS_KEY, JSON.stringify(c)); }
   const xmlEsc = (t) => t.replace(/[<>&'"]/g, (ch) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", "'": "&apos;", '"': "&quot;" })[ch]);
   const audioCache = new Map();   // text -> object URL (small, this session only)
@@ -595,7 +676,7 @@
   }
 
   window.claude = { use: async (name) => ({ sample, db, user, downloads })[name] || null };
-  window.NASEM_APP = { getConfig, setConfig, test, shredAll, state, PROVIDER_NAMES, tts, gateway: { get: getGW, login: gwLogin, logout: gwLogout }, canAudio, canImage, image, takeShared, push };
+  window.NASEM_APP = { getConfig, setConfig, test, shredAll, state, PROVIDER_NAMES, tts, gateway: { get: getGW, login: gwLogin, logout: gwLogout }, canAudio, canImage, image, takeShared, push, usage, exhausted };
 
   if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
     window.addEventListener("load", () => navigator.serviceWorker.register("./sw.js").catch(() => {}));

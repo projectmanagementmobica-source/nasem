@@ -420,7 +420,7 @@ const FALLBACK = {
   llm_unavailable:"مش قادر أوصل للخدمة دلوقتي، جرّب تاني بعد شوية.",
   not_granted:"التجربة محتاجة إذن استخدام Claude عشان تفهم كلامك. اسمح بيه وجرّب تاني.",
   sampling_unavailable:"التحليل مش متاح في العرض ده. افتح الصفحة من داخل Claude.",
-  rate_limited:"طلبات كتير ورا بعض. استنى دقيقة وجرّب تاني.",
+  rate_limited:"الخدمة زحمة دلوقتي. استنى ثواني وجرّب تاني.",
   prompt_too_large:"الكلام طويل أوي، قسّمه على أكتر من رسالة.",
   cancelled:"وقفت.",
   no_key:"محتاج مفتاح ذكاء الأول: زرار الدرع ← مصدر الذكاء ← حط مفتاح Claude أو ChatGPT أو Gemini.",
@@ -438,7 +438,7 @@ const blankProfile = () => ({
   close:[], dismissed:{}, learnedLog:[],
 });
 const blank = () => ({v:4, consent:null, settings:{sensitive:false, city:"القاهرة", weekend:"fri_sat", customHolidays:[], hiddenHolidays:[]}, profile:blankProfile(), memories:[], revisions:[], commitments:[], actions:[], messages:[],
-  documents:[], ledger:{loans:[], gam3eyas:[]}, promises:[], meds:[], medLog:{}, decisions:[],
+  documents:[], ledger:{loans:[], gam3eyas:[]}, promises:[], meds:[], medLog:{}, decisions:[], lexicon:[], knowledge:[], learnStats:{local:0, cached:0},
   emergency:{blood:"", allergies:"", conditions:"", insurance:"", contacts:[], notes:""},
   privacyStats:{month:"", messages:0, hidden:0, files:0, rawMedia:0}});
 let S = blank();
@@ -656,13 +656,31 @@ const describeAction = a => a.type === "update_memory" ? `change ${a.payload.ent
   : `add commitment "${a.payload.title}"${a.payload.due ? " due " + localISO(new Date(a.payload.due)) : ""}`;
 
 /* Short refs (m1, c1, p1) keep ids out of the prompt and let us validate every ref the model returns. */
-function buildContext(){
+/* Words of a text, normalized for matching (Arabic letter variants, no diacritics, no "ال"). */
+function wordsOf(t){
+  return String(t || "").toLowerCase().replace(/[\u064B-\u0652\u0640]/g, "").replace(/[إأآا]/g, "ا").replace(/ى/g, "ي").replace(/ة/g, "ه")
+    .split(/[^\p{L}\p{N}]+/u).map(w => w.replace(/^(ال|وال|بال|لل)/, "")).filter(w => w.length > 1);
+}
+function similarity(a, b){
+  const A = new Set(wordsOf(a)), B = new Set(wordsOf(b)); if (!A.size || !B.size) return 0;
+  let inter = 0; for (const w of A) if (B.has(w)) inter++;
+  return inter / Math.min(A.size, B.size);
+}
+/* Lighter requests: send the memories that matter for THIS message (+ core identity), not all of them. */
+function relevantMemories(text, limit = 18){
+  const pool = S.memories.filter(m => m.active && (m.privacy !== "sensitive" || S.settings.sensitive));
+  if (!text || pool.length <= limit) return pool;
+  const tw = new Set(wordsOf(text)), core = /^(name|first_name|job|job_title|employer|city|الاسم)$/;
+  const score = m => { const mw = wordsOf(`${m.entity} ${m.key} ${m.value}`); let sc = 0; for (const w of mw) if (tw.has(w)) sc += 3;
+    if (m.entity === "user" && core.test(m.key)) sc += 2; return sc + (m.last_confirmed_at || "").localeCompare("") * 0; };
+  return pool.map(m => [score(m), m]).sort((a, b) => b[0] - a[0] || (b[1].last_confirmed_at || "").localeCompare(a[1].last_confirmed_at || "")).slice(0, limit).map(x => x[1]);
+}
+function buildContext(text){
   const refs = {m:{}, c:{}, p:{}};
-  const memories = S.memories.filter(m => m.active && (m.privacy !== "sensitive" || S.settings.sensitive))
-    .sort((a,b) => b.last_confirmed_at.localeCompare(a.last_confirmed_at)).slice(0,60)
+  const memories = relevantMemories(text)
     .map((m,i) => { const r = "m"+(i+1); refs.m[r] = m.id; return {ref:r, category:m.category, entity_name:m.entity, attribute_key:m.key, attribute_value:m.value}; });
   const commitments = S.commitments.filter(c => c.status === "pending" && c.approved_at)
-    .sort((a,b) => (a.due||"9").localeCompare(b.due||"9")).slice(0,30)
+    .sort((a,b) => (a.due||"9").localeCompare(b.due||"9")).slice(0,12)
     .map((c,i) => { const r = "c"+(i+1); refs.c[r] = c.id; return {ref:r, title:c.title, due_date:c.due ? localISO(new Date(c.due)) : null, description:c.description}; });
   const awaiting = S.actions.filter(a => a.status === "pending")
     .sort((a,b) => b.created_at.localeCompare(a.created_at)).slice(0,20)
@@ -710,7 +728,8 @@ Reply with ONLY one JSON object (no prose, no markdown) with exactly these keys:
  "scam_check":null,
  "promises":[],
  "studio_request":null,
- "decision_request":null}
+ "decision_request":null,
+ "learned":[]}
 
 ## agent_reply (always)
 - Spoken aloud: 1-3 short sentences, no lists/markdown/emojis. Same language and dialect as the user (Egyptian Arabic for Egyptian Arabic).
@@ -768,6 +787,10 @@ Use null for parts that don't apply. Copy amounts exactly as written. Do not als
 - they_promised: someone promised the user ("قال هيرد عليا الخميس"، "المورد هيبعت البضاعة السبت").
 Only clear promises; [] otherwise.
 
+## learned: the user's personal shorthand, taught explicitly
+[{"phrase":"بعد الشغل","meaning":"حوالي الساعة 5 العصر"}]
+ONLY when the user explains what they mean by a phrase, nickname or abbreviation ("لما أقول ... يعني ..."، "الحاج يعني أبويا"), or corrects how you understood them ("لأ، قصدي ..."). Max 3 items, short. [] otherwise. Use <user_dictionary> to understand the user.
+
 ## decision_request
 Set {"question":"<the decision restated completely, in the user's language>"} when the user is weighing a PERSONAL choice: whether to buy, move, change jobs, accept an offer, or choose between options for their own life. Keep agent_reply to one short sentence. For how/where/best-way questions that are not a personal choice, use guide_request instead. Otherwise null.
 
@@ -787,6 +810,7 @@ user_timezone: ${tz}
 </context>
 ${egyptTime().text}
 ${holidayContext()}
+${S.lexicon.length ? `<user_dictionary>\n${S.lexicon.slice(-40).map(x => `"${x.phrase}" = ${x.meaning}`).join("\n")}\n</user_dictionary>` : ""}
 <known_memories>
 ${esc(JSON.stringify(ctx.memories), "known_memories")}
 </known_memories>
@@ -876,6 +900,8 @@ function parseExtraction(raw, refs){
   const st = raw.studio_request;
   if (st && typeof st === "object" && ["write","cv","deck","design","page"].includes(st.kind) && isStr(st.brief, 3000))
     out.studio = {kind: st.kind, brief: st.brief.trim()};
+  out.learned = (Array.isArray(raw.learned) ? raw.learned : []).filter(x => x && isStr(x.phrase, 60) && isStr(x.meaning, 160)).slice(0, 3)
+    .map(x => ({phrase: x.phrase.trim(), meaning: x.meaning.trim()}));
   const dr = raw.decision_request;
   if (dr && typeof dr === "object" && isStr(dr.question, 1500)) out.decision = dr.question.trim();
   return out;
@@ -1019,6 +1045,11 @@ function persist(parsed, source, requestId){
     const c = byId(S.commitments, id);
     if (c && c.status === "pending" && c.approved_at){ c.status = "completed"; c.completed_at = now; items.push({type:"completed", id}); }
   }
+  for (const l of parsed.learned || []){
+    const ex = S.lexicon.find(x => normEntity(x.phrase) === normEntity(l.phrase));
+    if (ex){ ex.meaning = l.meaning; ex.at = now; items.push({type:"learned", id:ex.id}); }
+    else { const e = {id:uid(), ...l, at: now}; S.lexicon.push(e); items.push({type:"learned", id:e.id}); }
+  }
   for (const pr of parsed.promises || []){
     const e = {id:uid(), ...pr, status:"open", at: now};
     S.promises.push(e); items.push({type:"promise", id:e.id});
@@ -1121,12 +1152,17 @@ function parseGuide(raw){
 async function runGuide(msg, ctx){
   const sample = await getSample();
   msg.guideState = "loading"; render(); scrollDown();
+  if (!msg.forceFresh){
+    const hit = knowledgeLookup(msg.guideQuestion);
+    if (hit){ msg.guide = hit.guide; msg.guideState = "ready"; msg.guideFromMemory = hit.at; S.learnStats.cached++; return; }
+  }
   try{
     if (!sample){ const e = new Error("no sample"); e.code = "sampling_unavailable"; throw e; }
     abortCtl = new AbortController();
     const vault = msg.vaultKeep || makeVault();
     const raw = vault.unmask(await sample.json(vault.mask(buildGuidePrompt(msg.guideQuestion, ctx)) + TOKEN_NOTE, {modelTier:"default", cache:false, signal:abortCtl.signal, webSearch:true}));
     msg.guide = parseGuide(raw); msg.guideProvider = window.NASEM_APP ? window.NASEM_APP.state.lastProvider : null; msg.guideState = "ready";
+    knowledgeSave(msg.guideQuestion, msg.guide); msg.guideFromMemory = null;
   }catch(e){
     msg.guideState = e && e.code === "cancelled" ? "cancelled" : "failed";
     if (!(e && e.code === "cancelled")) console.warn(e);
@@ -1159,6 +1195,8 @@ async function copyText(t){
 function guideCard(m){
   const g = m.guide;
   const card = h("div",{class:"guide"});
+  if (m.guideFromMemory) card.append(h("div",{class:"att-note"}, `من ذاكرة نسيم (اتعلمته ${fmtDay(m.guideFromMemory)}) من غير ما أدوّر تاني. `,
+    h("button",{class:"link-btn", style:"color:var(--breeze)", onclick:() => { if (busy) return; m.forceFresh = true; m.guideFromMemory = null; busy = true; runGuide(m, buildContext(m.guideQuestion)).finally(() => { m.forceFresh = false; busy = false; render(); store.save(); }); }}, "حدّث")));
   if (g.title) card.append(h("h3",{}, g.title));
   if (g.summary) card.append(h("div",{class:"bottom"}, g.summary));
   const picks = [];
@@ -1189,10 +1227,22 @@ async function send(text, source = "text"){
   if (!text || busy || !ready) return;
   if (!S.consent){ openConsent(); return; }
   if (text.length > MAX_INPUT){ toast("الرسالة أطول من 4000 حرف."); return; }
+  // Simple things are answered on the phone itself: instant, private, and they don't spend the AI quota.
+  if (!EMERGENCY_RE.test(text)){
+    const local = localAnswer(text);
+    if (local){
+      S.messages.push({id:uid(), role:"user", text, at:nowISO(), source}); noteMessage(text, source);
+      const agent = {id:uid(), role:"agent", text: local, at:nowISO(), local:true};
+      S.learnStats = S.learnStats || {local:0, cached:0}; S.learnStats.local++;
+      S.messages.push(agent); input.value = ""; autosize(); render(); scrollDown(); store.save();
+      speak(agent.text, source === "voice");
+      return;
+    }
+  }
   // Safety first: an emergency gets 123 on screen immediately, before any AI call.
   if (EMERGENCY_RE.test(text)) S.messages.push({id:uid(), role:"agent", at:nowISO(), emergency:true,
     text:"لو فيه خطر على حياة حد، اتصل بالإسعاف 123 دلوقتي حالاً."});
-  const ctx = buildContext();                      // history BEFORE this message
+  const ctx = buildContext(text);                  // history BEFORE this message
   input.value = ""; autosize();
   S.messages.push({id:uid(), role:"user", text, at:nowISO(), source});
   noteMessage(text, source);
@@ -1233,7 +1283,7 @@ async function send(text, source = "text"){
   }catch(e){
     const code = (e && e.code) || "llm_unavailable";
     if (code !== "cancelled") console.warn(e);
-    agent = {id:uid(), role:"agent", text:FALLBACK[code] || FALLBACK.llm_unavailable, at:nowISO(), error:code};
+    agent = {id:uid(), role:"agent", text:errText(e, code), at:nowISO(), error:code};
   }
   if (!agent.error && window.NASEM_APP) agent.provider = window.NASEM_APP.state.lastProvider;
   S.messages.push(agent);
@@ -1305,6 +1355,14 @@ function h(tag, attrs, ...kids){
   }
   for (const k of kids.flat()){ if (k == null || k === false) continue; el.append(k.nodeType ? k : document.createTextNode(String(k))); }
   return el;
+}
+/* Honest error text: the daily free quota says WHEN it comes back and what to do meanwhile. */
+function errText(e, code){
+  if (code === "quota_daily"){
+    const when = e && e.resetAt ? new Intl.DateTimeFormat("ar-EG", {weekday:"long", hour:"numeric", minute:"2-digit"}).format(new Date(e.resetAt)) : "الساعة 10 الصبح";
+    return `خلص الحد المجاني اليومي بتاع Gemini (حوالي 20 رسالة لكل موديل). بيرجع ${when}. لحد كده: الديمو شغال على اشتراكك، أو ضيف مفتاح تاني من مصدر الذكاء.`;
+  }
+  return FALLBACK[code] || FALLBACK.llm_unavailable;
 }
 const fmtDate = iso => iso ? new Intl.DateTimeFormat("ar-EG",{weekday:"long", day:"numeric", month:"long", hour:"numeric", minute:"2-digit"}).format(new Date(iso)) : "من غير معاد";
 const fmtTime = iso => new Intl.DateTimeFormat("ar-EG",{hour:"numeric", minute:"2-digit"}).format(new Date(iso));
@@ -1400,6 +1458,7 @@ function renderChat(){
     if (m.emergency){ thread.append(h("div",{class:"msg agent"}, emergencyCard(m.text))); continue; }
     const wrap = h("div",{class:"msg agent" + (m.error ? " error" : "")}, h("div",{class:"bubble"}, m.text));
     if (m.provider && window.NASEM_APP) wrap.append(h("div",{class:"meta"}, "الرد من " + window.NASEM_APP.PROVIDER_NAMES[m.provider]));
+    if (m.local) wrap.append(h("div",{class:"meta"}, "رد فوري من الموبايل، من غير ذكاء ولا نت"));
     if (m.privacy){
       const box = h("div",{class:"sent", hidden:true}, h("div",{class:"sent-label"}, "اللي وصل لـ Claude من رسالتك:"), h("div",{}, m.privacy.sent));
       wrap.append(h("div",{class:"chips"}, h("span",{class:"chip lockchip"},
@@ -1418,6 +1477,10 @@ function renderChat(){
           const what = a.type === "approve_commitment" ? a.payload.title : a.type === "delete_memory" ? `مسح ${keyLabel(a.payload.key)}` : `${keyLabel(a.payload.key)} ← ${a.payload.proposed_value}`;
           const verb = it.outcome === "approved" ? "وافقت على" : it.outcome === "rejected" ? "رفضت" : "ما اتنفذش";
           chips.push(h("span",{class:"chip done"}, `${verb}: ${what}`));
+        } else if (it.type === "learned"){
+          const e = S.lexicon.find(x => x.id === it.id); if (!e) continue;
+          chips.push(h("span",{class:"chip done"}, `اتعلمت: "${e.phrase}" = ${e.meaning}`,
+            h("button",{onclick:() => { S.lexicon = S.lexicon.filter(x => x.id !== e.id); render(); store.save(); }}, "تراجع")));
         } else if (it.type === "promise"){
           const e = S.promises.find(x => x.id === it.id); if (!e) continue;
           chips.push(h("span",{class:"chip done"}, e.direction === "they_promised" ? `مستني: ${e.person} (${e.what})` : `وعدت ${e.person}: ${e.what}`,
@@ -1478,6 +1541,7 @@ function renderMemory(){
   p.append(emergencySection());
   p.append(docsSection());
   p.append(decisionsSection());
+  p.append(learningSection());
   p.append(holidaysSection());
   p.append(moneySection());
   const act = S.memories.filter(m => m.active);
@@ -1788,10 +1852,19 @@ function speechMood(t){
   if (/مبروك|برافو|ألف مبروك|تهانينا|هايل|ممتاز|🎉/.test(t)) return "happy";
   return "warm";
 }
+let noArabicWarned = false;
 function speakDevice(clean, lang, report){
   if (!hasTTS){ if (report) toast(TTS_HELP.unsupported); return; }
   const pick = () => lang === "en" ? englishVoice() : arabicVoice();
   const v = pick();
+  // Voices are loaded but none is Arabic: a non-Arabic engine reading Arabic is gibberish. Say why instead.
+  if (lang === "ar" && !v && speechSynthesis.getVoices().length){
+    if (report || !noArabicWarned){
+      noArabicWarned = true;
+      toast(window.NASEM_APP ? "مفيش صوت عربي على الموبايل. من الإعدادات ← صوت نسيم ← اختار Gemini (مجاني) لصوت بشري." : TTS_HELP.novoice);
+    }
+    return;
+  }
   if (report && !v && !speechSynthesis.getVoices().length){
     // Voices can load late: retry once shortly, still inside the same user gesture's grace period.
     setTimeout(() => speakNow(clean, pick(), report, lang), 350); return;
@@ -2105,7 +2178,7 @@ async function processAttachment(action, a, question, userMsgId){
   }catch(e){
     const code = (e && e.code) || "llm_unavailable";
     if (code !== "cancelled") console.warn(e);
-    const msg = code === "images_unavailable" ? "قراية الصور مش متاحة هنا." : code === "image_rejected" ? "الصورة دي ما اتقبلتش (نوع أو حجم غير مدعوم)." : code === "llm_output_invalid" ? "ما قدرتش أطلّع حاجة مفيدة من الملف ده. جرّب صورة أوضح أو ملف تاني." : (FALLBACK[code] || FALLBACK.llm_unavailable);
+    const msg = code === "images_unavailable" ? "قراية الصور مش متاحة هنا." : code === "image_rejected" ? "الصورة دي ما اتقبلتش (نوع أو حجم غير مدعوم)." : code === "llm_output_invalid" ? "ما قدرتش أطلّع حاجة مفيدة من الملف ده. جرّب صورة أوضح أو ملف تاني." : (errText(e, code));
     agent = {id:uid(), role:"agent", text: msg, at: nowISO(), error: code};
   }
   if (!agent.error && window.NASEM_APP) agent.provider = window.NASEM_APP.state.lastProvider;
@@ -2381,7 +2454,7 @@ function cloudVoiceSettings(){
   const sel = (list, cur, onPick) => { const s2 = h("select",{class:"voice-select"}, list.map(([v, t]) => { const o = h("option",{value:v}, t); if (v === cur) o.selected = true; return o; }));
     s2.addEventListener("change", () => { onPick(s2.value); save(); }); return s2; };
   return h("div",{class:"ai-prov", style:"margin-bottom:10px"},
-    h("div",{class:"section-title", style:"margin-top:0"}, "صوت مصري واضح (Azure)"),
+    h("div",{class:"section-title", style:"margin-top:0"}, "صوت نسيم"),
     h("div",{class:"seg seg-wrap"}, [["gemini","Gemini (مجاني)"],["device","الموبايل"],["server","السيرفر"],["azure","Azure"]].map(([v, t]) =>
       h("button",{"aria-pressed": String(c.provider === v), onclick:() => { c.provider = v; save(); openSettings(); }}, t))),
     c.provider === "gemini" ? h("div",{},
@@ -2404,7 +2477,7 @@ function cloudVoiceSettings(){
 
 /* ---------------- identity: "تعرّف على نسيم" ---------------- */
 const APP = {
-  name: "نسيم", nameLatin: "NASEM AI", version: "إصدار 1.9 (تطبيق)",
+  name: "نسيم", nameLatin: "NASEM AI", version: "إصدار 2.3 (تطبيق)",
   owner: "أشرف قاسم",
   year: 2026,
   can: [
@@ -2463,17 +2536,22 @@ document.getElementById("aboutBtn").addEventListener("click", openAbout);
 function aiSettings(){
   const A = window.NASEM_APP; if (!A) return null;
   const cfg = A.getConfig(), save = () => A.setConfig(cfg);
+  const MODEL_RE = /^(?=.*[-\d])[a-z0-9][a-z0-9.\-_]{2,80}$/;   // real model ids always have a hyphen or a digit
   const field = (label, value, onInput, type, ph) => {
     const i = h("input",{class:"voice-select", type, placeholder: ph || "", dir:"ltr", autocomplete:"off", spellcheck:"false"}); i.value = value || "";
-    i.addEventListener("input", () => { onInput(i.value.trim()); save(); });
-    return h("label",{class:"ai-field"}, h("span",{class:"pref-label"}, label), i);
+    const isModel = /موديل/.test(label), warn = h("div",{class:"att-note", style:"color:var(--danger)", hidden:true});
+    const check = () => { const v = i.value.trim(); warn.hidden = !(isModel && v && !MODEL_RE.test(v));
+      warn.textContent = "ده مش شكل اسم موديل. اسم الموديل حروف إنجليزي صغيرة وأرقام وشَرطة، زي gemini-3.5-flash. لو مش محتاجه سيب الخانة فاضية."; };
+    i.addEventListener("input", () => { onInput(i.value.trim()); save(); check(); });
+    check();
+    return h("label",{class:"ai-field"}, h("span",{class:"pref-label"}, label), i, warn);
   };
   const prov = (id, name, ph) => h("details",{class:"ai-prov", open: (id === cfg.primary && !cfg[id].key) ? true : null},
     h("summary",{}, name + (cfg[id].key ? "  ✓" : "")),
     field("المفتاح (API key)", cfg[id].key, v => { cfg[id].key = v; }, "password", ph),
     field("الموديل الأساسي", cfg[id].main, v => { cfg[id].main = v; }, "text", "اسم الموديل من موقع الشركة"),
     field("الموديل السريع (اختياري)", cfg[id].quick, v => { cfg[id].quick = v; }, "text", ""),
-    id !== "anthropic" ? field("موديل الصور (للاستوديو، اختياري)", cfg[id].imageModel, v => { cfg[id].imageModel = v; }, "text", "اسم موديل الصور من موقع الشركة") : null,
+    (id === "gemini" || id === "openai") ? field("موديل الصور (للاستوديو، اختياري)", cfg[id].imageModel, v => { cfg[id].imageModel = v; }, "text", "اسم موديل الصور من موقع الشركة") : null,
     h("button",{class:"btn ghost", onclick: async e => {
       const b = e.currentTarget; b.textContent = "بجرّب…";
       try{ await A.test(id); b.textContent = "شغال ✓"; }
@@ -2508,14 +2586,18 @@ function aiSettings(){
   return h("div",{class:"pref"},
     h("div",{class:"section-title"}, "مصدر الذكاء"), modeSeg,
     h("div",{class:"pref-label", style:"margin-top:8px"}, "الأساسي، والباقي احتياطي تلقائي لو وقع"),
-    h("div",{class:"seg"}, [["anthropic","Claude"],["openai","ChatGPT"],["gemini","Gemini"]].map(([v, t]) =>
+    h("div",{class:"seg seg-wrap"}, [["gemini","Gemini"],["groq","Groq"],["anthropic","Claude"],["openai","ChatGPT"]].map(([v, t]) =>
       h("button",{"aria-pressed": String(cfg.primary === v), onclick:() => { cfg.primary = v; save(); openSettings(); }}, t))),
     prov("anthropic", "Claude (Anthropic)", "sk-ant-..."),
     prov("openai", "ChatGPT (OpenAI)", "sk-..."),
     prov("gemini", "Gemini (Google)", "AIza..."),
+    prov("groq", "Groq (مجاني، من غير كارت)", "gsk_..."),
+    h("div",{class:"att-note"}, "عشان نسيم ما يقفش: حط مفتاح Gemini ومفتاح Groq الاتنين. لما واحد يخلص حده المجاني، التاني يرد لوحده. مفتاح Groq من console.groq.com/keys"),
     h("div",{class:"pref-label", style:"margin-top:10px"}, "البحث على النت في الأدلة"),
     h("div",{class:"seg"}, [[true,"شغال"],[false,"مقفول"]].map(([v, t]) =>
       h("button",{"aria-pressed": String(cfg.webSearch === v), onclick:() => { cfg.webSearch = v; save(); openSettings(); }}, t))),
+    (() => { const u = A.usage ? A.usage() : null, ex = A.exhausted ? Object.keys(A.exhausted()) : [];
+      return u ? h("div",{class:"att-note"}, `النهاردة: ${u.total} طلب${ex.length ? " • خلص حد: " + ex.join("، ") : ""}. الحد المجاني حوالي 20 طلب لكل موديل في اليوم، ونسيم بيتنقل للموديل اللي بعده لوحده.`) : null; })(),
     h("div",{class:"att-note"}, "المفاتيح على الموبايل ده بس، وبتروح لشركتها مباشرة. الشركة بيوصلها كلامك بعد إخفاء الأسماء والأرقام. ده للتجربة الشخصية: قبل ما التطبيق ينزل للناس، المفاتيح لازم تتنقل لسيرفرنا."));
 }
 
@@ -2918,7 +3000,7 @@ async function runStudio(kind, params, {fromChat = false} = {}){
   }catch(e){
     const code = (e && e.code) || "llm_unavailable";
     if (code !== "cancelled") console.warn(e);
-    agent = {id:uid(), role:"agent", text: code === "llm_output_invalid" ? "ما قدرتش أطلّع نتيجة كويسة. جرّب توضّح طلبك أكتر." : (FALLBACK[code] || FALLBACK.llm_unavailable), at: nowISO(), error: code};
+    agent = {id:uid(), role:"agent", text: code === "llm_output_invalid" ? "ما قدرتش أطلّع نتيجة كويسة. جرّب توضّح طلبك أكتر." : (errText(e, code)), at: nowISO(), error: code};
   }
   S.messages.push(agent);
   busy = false; abortCtl = null; render(); scrollDown(); store.save();
@@ -3377,7 +3459,7 @@ async function runDecision(q, {fromChat = false} = {}){
   }catch(e){
     const code = (e && e.code) || "llm_unavailable";
     if (code !== "cancelled") console.warn(e);
-    agent = {id:uid(), role:"agent", text: code === "llm_output_invalid" ? "ما قدرتش أرتّب الاختيارات كويس. احكيلي القرار بتفاصيل أكتر." : (FALLBACK[code] || FALLBACK.llm_unavailable), at: nowISO(), error: code};
+    agent = {id:uid(), role:"agent", text: code === "llm_output_invalid" ? "ما قدرتش أرتّب الاختيارات كويس. احكيلي القرار بتفاصيل أكتر." : (errText(e, code)), at: nowISO(), error: code};
   }
   S.messages.push(agent);
   busy = false; abortCtl = null; render(); scrollDown(); store.save();
@@ -3548,6 +3630,86 @@ function holidaysSection(){
     h("div",{class:"row"}, h("label",{class:"ai-field"}, h("span",{class:"pref-label"}, "من"), fIn), h("label",{class:"ai-field"}, h("span",{class:"pref-label"}, "لحد"), tIn)),
     h("div",{class:"row"}, h("button",{class:"btn ghost", onclick: calc}, "احسب")), res,
     h("div",{class:"att-note"}, "الإجازات الهجرية تقريبية، والحكومة ممكن تنقل أي إجازة بقرار رسمي. لو حصل، عدّلها من هنا.")));
+  return box;
+}
+
+/* ================= on-device answers: no AI request for simple, exact questions ================= */
+const pickOne = arr => arr[Math.floor(Math.random() * arr.length)];
+function localAnswer(raw){
+  const t = String(raw).trim().replace(/[؟?!.،,]+$/g, "").replace(/\s+/g, " ");
+  if (t.length > 60) return null;                                   // anything longer deserves real understanding
+  const name = (S.memories.find(m => m.active && m.entity === "user" && /^(name|first_name|الاسم)$/.test(m.key)) || {}).value;
+  const now = new Date(), et = egyptTime();
+  const todayList = () => S.commitments.filter(c => c.status === "pending" && c.approved_at && c.due && dayKey(new Date(c.due)) === dayKey(now)).sort((a, b) => a.due.localeCompare(b.due));
+  // greetings: answer like a person, and add today's essentials when there are any
+  if (/^(صباح (الخير|الفل|النور|الورد)|مساء (الخير|الفل|النور)|السلام عليكم|سلام عليكم|اهلا|أهلا|أهلاً|هاي|ازيك|إزيك|عامل ايه|عامل إيه)( يا نسيم)?$/.test(t)){
+    const greet = /^صباح/.test(t) ? pickOne(["صباح النور", "صباح الفل", "يا صباح الخير"]) : /^مساء/.test(t) ? pickOne(["مساء النور", "مساء الفل"]) : /سلام/.test(t) ? "وعليكم السلام" : pickOne(["أهلاً بيك", "أهلاً، تمام الحمد لله"]);
+    const items = todayList();
+    const extra = items.length ? ` النهاردة عندك ${items.length === 1 ? "حاجة واحدة" : items.length + " حاجات"}، أولها ${items[0].title} ${fmtTime(items[0].due)}.` : " تحب نعمل إيه النهاردة؟";
+    return `${greet}${name ? " يا " + name : ""}.${extra}`;
+  }
+  if (/^(شكرا|شكراً|متشكر|متشكرين|تسلم|تسلم ايدك|تسلم إيدك|ميرسي|thanks|thank you)( يا نسيم)?( جدا| جداً| أوي)?$/i.test(t))
+    return pickOne(["العفو، أي وقت.", "تحت أمرك.", "ولا يهمك، أنا هنا."]);
+  // prayer times (computed on the phone)
+  const pm = t.match(/(الفجر|الضهر|الظهر|العصر|المغرب|العشا|العشاء)\s*(امتى|إمتى|الساعة كام|الساعه كام|كام)?/);
+  if (pm && /(امتى|إمتى|كام|مواعيد|مواقيت)/.test(t)){
+    const map = {"الفجر":"fajr","الضهر":"dhuhr","الظهر":"dhuhr","العصر":"asr","المغرب":"maghrib","العشا":"isha","العشاء":"isha"}, k = map[pm[1]];
+    const at = et.today[k] > now ? et.today[k] : et.tomorrow[k];
+    return `${PRAYER_AR[k]} ${dayKey(at) === dayKey(now) ? "النهاردة" : "بكرة"} الساعة ${fmtTime(at.toISOString())} في ${et.city}.`;
+  }
+  if (/^(مواعيد|مواقيت) (الصلاة|الصلاه)( النهاردة| النهارده| اليوم)?$/.test(t))
+    return `مواقيت النهاردة في ${et.city}: ` + ["fajr","dhuhr","asr","maghrib","isha"].map(k => `${PRAYER_AR[k]} ${fmtTime(et.today[k].toISOString())}`).join("، ") + ".";
+  // dates
+  if (/^(النهاردة|النهارده|اليوم) (كام|ايه|إيه)( هجري)?$|^(التاريخ|تاريخ النهاردة|تاريخ النهارده)( هجري)?$/.test(t))
+    return `النهاردة ${new Intl.DateTimeFormat("ar-EG", {weekday:"long", day:"numeric", month:"long", year:"numeric"}).format(now)}، يعني ${et.hijri}.`;
+  // today's agenda
+  if (/^(ايه|إيه) (اللي|الي) (عليا|عندي|ورايا) (النهاردة|النهارده|اليوم)$|^(جدولي|برنامجي) (النهاردة|النهارده)$/.test(t)){
+    const items = todayList();
+    if (!items.length) return "النهاردة مفيش حاجة متسجلة عليك. يوم فاضي.";
+    return `النهاردة عندك ${items.length === 1 ? "حاجة واحدة" : items.length + " حاجات"}: ` + items.map(c => `${c.title} ${fmtTime(c.due)}`).join("، ") + ".";
+  }
+  // working days in a month
+  const wm = t.match(/^كام يوم شغل في (شهر )?(\S+)$/);
+  if (wm){
+    const k = wm[2].replace(/^ال/, ""), mi = AR_MONTHS[k];
+    if (mi){
+      const y = now.getMonth() + 1 > mi ? now.getFullYear() + 1 : now.getFullYear();
+      const r = workdaysBetween(new Date(y, mi - 1, 1), new Date(y, mi, 0)), names = [...new Set(r.hols.map(x => x.name))];
+      return `${k} ${y}: ${r.work} يوم شغل، و${r.off} يوم إجازة${names.length ? " (منهم " + names.join("، ") + ")" : ""}.`;
+    }
+  }
+  return null;
+}
+
+/* ================= Nasem's learning: dictionary + knowledge memory, all on the phone ================= */
+const KNOWLEDGE_DAYS = 30;
+function knowledgeLookup(q){
+  const now = Date.now(); let best = null;
+  for (const k of S.knowledge || []){
+    if (now - new Date(k.at).getTime() > KNOWLEDGE_DAYS * 864e5) continue;
+    const sc = similarity(q, k.q);
+    if (sc >= 0.8 && (!best || sc > best.sc)) best = {sc, ...k};
+  }
+  return best;
+}
+function knowledgeSave(q, guide){
+  if (!q || !guide) return;
+  S.knowledge = (S.knowledge || []).filter(k => similarity(q, k.q) < 0.8);
+  S.knowledge.push({id:uid(), q, guide, at: nowISO()});
+  if (S.knowledge.length > 80) S.knowledge = S.knowledge.slice(-80);
+}
+function learningSection(){
+  const box = h("div",{}, h("div",{class:"section-title"}, "اللي نسيم اتعلمه"));
+  const st = S.learnStats || {local:0, cached:0};
+  box.append(h("div",{class:"att-note", style:"margin:0 4px 6px"},
+    `${(S.lexicon || []).length} كلمة من كلامك • ${(S.knowledge || []).length} معلومة محفوظة • ${st.local} رد من الموبايل و${st.cached} إرشاد من الذاكرة من غير ما يصرف طلب ذكاء.`));
+  if ((S.lexicon || []).length) box.append(h("div",{class:"list"}, S.lexicon.slice().reverse().map(x => h("div",{class:"mem"},
+    h("div",{class:"k"}, "قاموسك"), h("div",{class:"v"}, `"${x.phrase}" = ${x.meaning}`),
+    h("div",{class:"foot"}, h("button",{class:"link-btn", onclick:() => { S.lexicon = S.lexicon.filter(y => y.id !== x.id); render(); store.save(); }}, "امسح"))))));
+  else box.append(h("div",{class:"att-note", style:"margin:0 4px"}, "علّمني كلامك: قول مثلاً \"لما أقول بعد الشغل يعني 5 العصر\"، وأنا أفتكرها على طول."));
+  if ((S.knowledge || []).length) box.append(h("details",{class:"ai-prov"}, h("summary",{}, `المعلومات المحفوظة (${S.knowledge.length})`),
+    h("ul",{class:"plain"}, S.knowledge.slice().reverse().slice(0, 20).map(k => h("li",{}, (k.guide && k.guide.title) || k.q, " ",
+      h("button",{class:"link-btn", onclick:() => { S.knowledge = S.knowledge.filter(y => y.id !== k.id); render(); store.save(); }}, "امسح"))))));
   return box;
 }
 
