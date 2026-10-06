@@ -317,6 +317,10 @@ main{overflow-x:hidden}
 
 .seg.seg-wrap{flex-wrap:wrap}.seg.seg-wrap button{flex:1 1 45%}
 
+.update-bar{position:fixed;inset-inline:12px;top:calc(10px + env(safe-area-inset-top,0px));z-index:30;background:var(--breeze);color:var(--breeze-ink,#fff);
+  border-radius:14px;padding:10px 14px;display:flex;align-items:center;justify-content:space-between;gap:10px;box-shadow:0 6px 20px rgba(0,0,0,.25);font-weight:500}
+.update-bar button{border:0;border-radius:10px;padding:8px 12px;background:#fff;color:#0E2733;font-weight:700}
+
 /* composer */
 .composer{padding:10px 16px 14px;display:flex;gap:10px;align-items:flex-end;background:var(--paper);border-top:1px solid var(--line)}
 .composer textarea{flex:1;resize:none;overflow-y:hidden;border:1px solid var(--line);background:var(--surface);border-radius:22px;padding:11px 16px;max-height:120px;min-height:46px;line-height:1.5}
@@ -708,7 +712,29 @@ function profileInstructions(){
   return out.length ? `\n<user_profile>\n${out.join("\n")}\n</user_profile>\n` : "";
 }
 
+/* Optional rule sections travel only when the message could need them (repairs always get everything). */
+const OPTIONAL_RULES = {
+  "money": /سلف|استلف|جمعي|قسط|جنيه|فلوس|رجّع|رجعلي|رجع لي|دين|مديون|اقترضت|قرض/,
+  "promises": /وعد|هبعت|هيبعت|هيرد|هرد|قال ه|قالت ه|قالي ه|اتفق|هيكلم|هيجيب|هجيب|هسلم|هيسلم|هيوصل|هوصل/,
+  "learned": /يعني|قصدي|لما أقول|لما اقول|أقصد|اقصد|بمعنى/,
+  "decision_request": /بفكر|أختار|اختار| ولا |أشتري|اشتري|أسيب|اسيب|أنقل|انقل|أقبل|اقبل|أحسن لي|احسن لي|الأفضل/,
+  "studio_request": /اكتب|صمم|بوست|إعلان|اعلان|سيرة|cv|عرض|بريزنتيشن|شرايح|لوجو|شعار|صفحة|موقع|بوستر|كابشن/i,
+  "scam_check": /نصب|احتيال|نصاب|مشبوه|كود|كسبت|جايزة|جائزة|حوّل|حول|انستا|instapay|otp|لينك|رابط/i,
+  "style_feedback": /ردودك|ردك|كلمني|اتكلم|أسلوب|اسلوب|طويل|قصير|رسمي|بسيط/,
+};
 function buildPrompt(text, ctx, repairNote){
+  const full = buildPromptFull(text, ctx, repairNote);
+  if (repairNote) return full;
+  // Drop ONLY the rule text of an unneeded section. The last section is followed by <context>, the memories
+  // and the user's message: those must always stay.
+  return full.split(/\n(?=## )/).map(sec => {
+    const name = (sec.match(/^## ([a-z_]+)/) || [])[1];
+    if (!name || !OPTIONAL_RULES[name] || OPTIONAL_RULES[name].test(text)) return sec;
+    const tail = sec.search(/\n<[a-z_]+>/);
+    return tail >= 0 ? sec.slice(tail + 1) : null;
+  }).filter(x => x !== null).join("\n");
+}
+function buildPromptFull(text, ctx, repairNote){
   const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || "Africa/Cairo";
   const today = new Intl.DateTimeFormat("ar-EG",{weekday:"long", day:"numeric", month:"long", year:"numeric"}).format(new Date());
   return `You are NASEM (نسيم), a warm, sharp, voice-first personal assistant that remembers what matters to the user and keeps their commitments on track.
@@ -1227,6 +1253,15 @@ async function send(text, source = "text"){
   if (!text || busy || !ready) return;
   if (!S.consent){ openConsent(); return; }
   if (text.length > MAX_INPUT){ toast("الرسالة أطول من 4000 حرف."); return; }
+  // No connection: keep the message and send it automatically when the network is back.
+  if (typeof navigator !== "undefined" && navigator.onLine === false && !localAnswer(text) && !EMERGENCY_RE.test(text)){
+    S.outbox = S.outbox || [];
+    const um = {id:uid(), role:"user", text, at:nowISO(), source, queued:true};
+    S.messages.push(um); S.outbox.push({id: um.id, text, source});
+    S.messages.push({id:uid(), role:"agent", at:nowISO(), text:"النت مقطوع دلوقتي. الرسالة محفوظة، وهبعتها لوحدها أول ما يرجع.", queuedNote: um.id});
+    input.value = ""; autosize(); render(); scrollDown(); store.save();
+    return;
+  }
   // Simple things are answered on the phone itself: instant, private, and they don't spend the AI quota.
   if (!EMERGENCY_RE.test(text)){
     const local = localAnswer(text);
@@ -1658,7 +1693,8 @@ function openConsent(){
 }
 
 async function exportData(){
-  const data = JSON.stringify({exported_at:nowISO(), app:"NASEM AI demo", ...S}, null, 2);
+  S.lastBackup = nowISO(); store.save();
+  const data = JSON.stringify({exported_at:nowISO(), app:"NASEM AI", ...S}, (k, v) => k === "vaultKeep" ? undefined : v, 2);
   const dl = (window.claude && window.claude.use) ? await window.claude.use("downloads") : null;
   if (dl){
     try{ await dl.save({filename:"nasem-my-data.json", data}); return; }
@@ -1687,7 +1723,8 @@ function openSettings(){
     toggle,
     h("p",{class:"fine"}, storeNote() + (S.consent ? " وافقت على الاستخدام " + ago(S.consent.at) + "." : "")),
     h("div",{class:"row"},
-      h("button",{class:"btn ghost", onclick:exportData}, "نزّل بياناتي"),
+      h("button",{class:"btn ghost", onclick:exportData}, "نزّل نسخة احتياطية"),
+      h("button",{class:"btn ghost", onclick:importData}, "استرجع من نسخة"),
       h("button",{class:"btn ghost", style:"color:var(--danger)", onclick:resetAll}, "امسح كل حاجة"),
       h("button",{class:"btn primary", onclick:closeSheet}, "تمام")));
   sheetBack.hidden = false;
@@ -2489,7 +2526,7 @@ function cloudVoiceSettings(){
 
 /* ---------------- identity: "تعرّف على نسيم" ---------------- */
 const APP = {
-  name: "نسيم", nameLatin: "NASEM AI", version: "إصدار 3.1 (تطبيق)",
+  name: "نسيم", nameLatin: "NASEM AI", version: "إصدار 3.2 (تطبيق)",
   owner: "أشرف قاسم",
   year: 2026,
   can: [
@@ -2738,6 +2775,10 @@ function insights(){
   for (const pr of S.promises.filter(x => x.direction === "they_promised" && x.status === "open" && x.due && new Date(x.due) < now))
     out.push({id:"pr" + pr.id, level:"warn", text:`${pr.person} وعدك: ${pr.what}، والميعاد عدّى.`,
       action:["أكتبله متابعة", () => send(`اكتبلي رسالة متابعة مهذبة لـ ${pr.person} بخصوص: ${pr.what}`)]});
+  const worth = S.memories.filter(m => m.active).length + (S.documents || []).length + S.commitments.length;
+  const lastB = S.lastBackup ? new Date(S.lastBackup).getTime() : 0;
+  if (worth >= 15 && now - lastB > 30 * day)
+    out.push({id:"bk" + localISO(now).slice(0, 7), level:"info", text:"ذاكرتك على الموبايل ده بس. خد نسخة احتياطية عشان ما تضيعش لو غيّرت الموبايل.", action:["نسخة احتياطية", () => exportData()]});
   const hidden = S.profile.dismissed || {};
   return out.filter(x => !hidden["ins:" + x.id]);
 }
@@ -3785,6 +3826,60 @@ async function activationOnBoot(){
   if (S.consent) openActivation();
 }
 
+/* ================= backup restore, offline queue, update notice ================= */
+function importData(){
+  const inp = document.createElement("input"); inp.type = "file"; inp.accept = ".json,application/json";
+  inp.onchange = async () => {
+    const f = inp.files && inp.files[0]; if (!f) return;
+    try{
+      const d = JSON.parse(await f.text());
+      if (!d || !Array.isArray(d.memories) || !Array.isArray(d.commitments)) throw new Error("not a Nasem backup");
+      const n = d.memories.filter(m => m.active).length, c = d.commitments.length;
+      if (!confirm(`النسخة دي فيها ${n} معلومة و${c} التزام${d.exported_at ? " (من " + fmtDay(d.exported_at) + ")" : ""}.\nهتحل مكان البيانات اللي على الجهاز ده. أكمّل؟`)) return;
+      const keep = {consent: S.consent};
+      delete d.exported_at; delete d.app;
+      store.load(JSON.stringify({...d, ...keep}));
+      S.lastBackup = nowISO();
+      await store.save(); closeSheet(); render(); toast("اترجّعت بياناتك ✓");
+    }catch(e){ console.warn(e); toast("الملف ده مش نسخة احتياطية من نسيم."); }
+  };
+  inp.click();
+}
+async function flushOutbox(){
+  if (!S.outbox || !S.outbox.length || busy || !ready) return;
+  const q = S.outbox.slice(); S.outbox = [];
+  for (const item of q){
+    S.messages = S.messages.filter(m => m.id !== item.id && m.queuedNote !== item.id);
+    render(); await send(item.text, item.source || "text");
+  }
+}
+if (typeof window !== "undefined" && window.addEventListener) window.addEventListener("online", () => { toast("النت رجع. ببعت الرسايل اللي كانت مستنية."); flushOutbox(); });
+
+/* New version on GitHub? Say so, and update with one tap (no more "close it twice"). */
+let updateShown = false;
+async function checkForUpdate(){
+  if (updateShown || !location.protocol.startsWith("http")) return;
+  try{
+    const html = await (await fetch("./index.html", {cache:"no-store"})).text();
+    const latest = (html.match(/version: "إصدار ([0-9.]+) \(تطبيق\)"/) || [])[1];
+    const mine = (APP.version.match(/([0-9.]+)/) || [])[1];
+    if (!latest || !mine || latest === mine) return;
+    updateShown = true;
+    const bar = h("div",{class:"update-bar", role:"status"}, `فيه نسخة جديدة من نسيم (${latest})`,
+      h("button",{onclick: async () => {
+        bar.textContent = "بحدّث…";
+        try{ const reg = navigator.serviceWorker && await navigator.serviceWorker.getRegistration(); if (reg) await reg.update(); }catch(e){}
+        location.reload();
+      }}, "حدّث دلوقتي"));
+    document.body.appendChild(bar);
+  }catch(e){}
+}
+if (typeof location !== "undefined" && String(location.protocol).startsWith("http")){   // only when opened from a real link
+  setTimeout(checkForUpdate, 4000);
+  setInterval(checkForUpdate, 30 * 60 * 1000);
+  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") checkForUpdate(); });
+}
+
 /* ---------------- misc ---------------- */
 let toastTimer;
 function toast(t){ const el = document.getElementById("toast"); el.textContent = t; el.classList.add("show"); clearTimeout(toastTimer); toastTimer = setTimeout(() => el.classList.remove("show"), 2600); }
@@ -3800,6 +3895,7 @@ render();
 store.init().then(() => {
   ready = true; render(); scrollDown();
   handleShared();
+  setTimeout(flushOutbox, 1500);
   setTimeout(activationOnBoot, 400);
   if (!S.consent) openConsent(); else if (!S.profile.onboarded) openQuickSetup(); else input.focus({preventScroll:true});
 });
