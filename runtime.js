@@ -13,9 +13,17 @@
   const CFG_KEY = "nasem-app-ai";
   // mode "gateway": the app talks only to Nasem's server (keys stay there) -> safe to give to people.
   // mode "keys": your own provider keys on this phone -> personal testing only.
-  const DEFAULT_GATEWAY_URL = "";   // set at deploy time, e.g. "https://api.nasem.app"
+  // The owner writes the server link ONCE in config.json on GitHub; every user's app picks it up.
+  const managedServer = () => { try { return localStorage.getItem("nasem-server") || ""; } catch (e) { return ""; } };
+  const ready = (async () => {
+    try {
+      const res = await fetch("./config.json", { cache: "no-store" });
+      if (res.ok) { const c = await res.json(); const s = String(c.server || "").trim().replace(/\/+$/, ""); if (s) localStorage.setItem("nasem-server", s); else localStorage.removeItem("nasem-server"); }
+    } catch (e) {}
+  })();
+  const DEFAULT_GATEWAY_URL = "";
   const DEFAULTS = {
-    mode: DEFAULT_GATEWAY_URL ? "gateway" : "keys",
+    mode: "keys",
     primary: "anthropic",
     webSearch: true,
     anthropic: { key: "", main: "claude-sonnet-5", quick: "claude-haiku-4-5-20251001" },
@@ -28,8 +36,9 @@
   function getConfig() {
     let c = {};
     try { c = JSON.parse(localStorage.getItem(CFG_KEY) || "{}"); } catch (e) {}
+    const mode = c.mode || (managedServer() ? "gateway" : "keys");   // managed install -> the owner's server by default
     return {
-      ...DEFAULTS, ...c,
+      ...DEFAULTS, ...c, mode,
       anthropic: { ...DEFAULTS.anthropic, ...(c.anthropic || {}) },
       openai: { ...DEFAULTS.openai, ...(c.openai || {}) },
       gemini: { ...DEFAULTS.gemini, ...(c.gemini || {}), main: ((c.gemini || {}).main || "").trim() || DEFAULTS.gemini.main },
@@ -77,7 +86,10 @@
       if (quotaIds.some((q) => /PerDay|Daily/i.test(q))) return Object.assign(err("quota_daily", "daily free quota used up"), { resetAt: nextPacificMidnight() });
       return Object.assign(err("rate_limited"), { retryAfter });
     }
-    if (res.status === 401 || res.status === 403) return err("bad_key", "key rejected");
+    if (res.status === 401 || res.status === 403) {
+      let detail = ""; try { detail = (await res.text()).slice(0, 200); } catch (e) {}
+      return err("bad_key", `key rejected ${res.status} ${detail}`);
+    }
     if (res.status === 413) return err("prompt_too_large");
     let msg = ""; try { msg = (await res.text()).slice(0, 300); } catch (e) {}
     return err("upstream_error", `${res.status} ${msg}`);
@@ -168,7 +180,7 @@
 
   // ---------------------------------------------------------------- gateway (Nasem's server)
   const GW_KEY = "nasem-app-gw";
-  function getGW() { let g = {}; try { g = JSON.parse(localStorage.getItem(GW_KEY) || "{}"); } catch (e) {} return { url: DEFAULT_GATEWAY_URL, email: "", access: "", refresh: "", ...g }; }
+  function getGW() { let g = {}; try { g = JSON.parse(localStorage.getItem(GW_KEY) || "{}"); } catch (e) {} return { url: managedServer() || DEFAULT_GATEWAY_URL, email: "", access: "", refresh: "", ...g, ...(managedServer() && !g.url ? { url: managedServer() } : {}) }; }
   function setGW(g) { localStorage.setItem(GW_KEY, JSON.stringify(g)); }
   const base = (u) => String(u || "").trim().replace(/\/+$/, "");
 
@@ -194,6 +206,50 @@
     if (!r.ok) throw err("upstream_error", String(r.status));
     const d = await r.json(); setGW({ url: base(url), email, access: d.access_token, refresh: d.refresh_token });
   }
+  // ---------------- activation (the owner approves each phone) ----------------
+  function deviceId() {
+    let id = localStorage.getItem("nasem-device-id");
+    if (!id) { id = "nd-" + (crypto.randomUUID ? crypto.randomUUID() : Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, "0")).join("")); localStorage.setItem("nasem-device-id", id); }
+    return id;
+  }
+  function deviceLabel() {
+    const ua = navigator.userAgent || "";
+    const os = /Android/i.test(ua) ? "Android" : /iPhone|iPad/i.test(ua) ? "iPhone" : /Windows/i.test(ua) ? "Windows" : /Mac/i.test(ua) ? "Mac" : "جهاز";
+    const br = /Edg\//.test(ua) ? "Edge" : /Chrome\//.test(ua) ? "Chrome" : /Safari\//.test(ua) ? "Safari" : /Firefox\//.test(ua) ? "Firefox" : "متصفح";
+    return `${os} • ${br}`;
+  }
+  const ACT_KEY = "nasem-activation";
+  const activation = {
+    server: () => managedServer() || base(getGW().url),
+    pending() { try { return JSON.parse(localStorage.getItem(ACT_KEY) || "null"); } catch (e) { return null; } },
+    deviceCode: () => deviceId().slice(-6),
+    async request(name, phone) {
+      const srv = this.server(); if (!srv) throw err("no_server");
+      const res = await fetch(srv + "/v1/access/request", { method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name: String(name).trim(), phone: String(phone).trim(), device_id: deviceId(), device_label: deviceLabel() }) });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) throw err((d.error && d.error.code) || "upstream_error", (d.error && d.error.message) || String(res.status));
+      localStorage.setItem(ACT_KEY, JSON.stringify({ id: d.request_id, secret: d.claim_secret, at: Date.now(), name, phone }));
+      return true;
+    },
+    /* -> "approved" | "pending" | "rejected" (+ note) | "none" */
+    async check() {
+      const p = this.pending(), srv = this.server(); if (!p || !srv) return { status: "none" };
+      const res = await fetch(srv + "/v1/access/claim", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ request_id: p.id, claim_secret: p.secret }) });
+      const d = await res.json().catch(() => ({}));
+      if (res.status === 410 || res.status === 404) { localStorage.removeItem(ACT_KEY); return { status: "none", note: d.error && d.error.message }; }
+      if (!res.ok) throw err("upstream_error", String(res.status));
+      if (d.status === "approved" && d.access_token) {
+        setGW({ url: srv, email: "", access: d.access_token, refresh: d.refresh_token });
+        const c = getConfig(); c.mode = "gateway"; setConfig(c);
+        localStorage.removeItem(ACT_KEY);
+        return { status: "approved" };
+      }
+      if (d.status === "rejected") localStorage.removeItem(ACT_KEY);
+      return { status: d.status, note: d.note };
+    },
+  };
+
   async function gwLogout() {
     const g = getGW();
     if (g.refresh) fetch(base(g.url) + "/v1/auth/logout", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ refresh_token: g.refresh }) }).catch(() => {});
@@ -308,6 +364,7 @@
           if (e && e.code === "rate_limited" && attempt === 0 && e.retryAfter && e.retryAfter <= 15) { await sleep(e.retryAfter * 1000 + 300, o.signal); continue; }
           if (e && e.code === "quota_daily") { markExhausted(m, e.resetAt); break; }
           if (e && e.code === "upstream_error" && /\b404\b/.test(e.message || "")) { missing.add(m); break; }   // model doesn't exist: try the next one
+          if (e && e.code === "upstream_error" && attempt === 0 && /\b5\d\d\b/.test(e.message || "")) { await sleep(1500, o.signal); continue; }   // busy: one quick retry
           if (e && (e.code === "rate_limited" || e.code === "upstream_error")) break;          // try the next model
           throw e;                                                                              // bad key etc.
         }
@@ -676,7 +733,7 @@
   }
 
   window.claude = { use: async (name) => ({ sample, db, user, downloads })[name] || null };
-  window.NASEM_APP = { getConfig, setConfig, test, shredAll, state, PROVIDER_NAMES, tts, gateway: { get: getGW, login: gwLogin, logout: gwLogout }, canAudio, canImage, image, takeShared, push, usage, exhausted };
+  window.NASEM_APP = { getConfig, setConfig, test, shredAll, state, PROVIDER_NAMES, tts, gateway: { get: getGW, login: gwLogin, logout: gwLogout }, activation, ready, managed: () => !!managedServer(), canAudio, canImage, image, takeShared, push, usage, exhausted };
 
   if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
     window.addEventListener("load", () => navigator.serviceWorker.register("./sw.js").catch(() => {}));

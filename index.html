@@ -424,7 +424,7 @@ const FALLBACK = {
   prompt_too_large:"الكلام طويل أوي، قسّمه على أكتر من رسالة.",
   cancelled:"وقفت.",
   no_key:"محتاج مفتاح ذكاء الأول: زرار الدرع ← مصدر الذكاء ← حط مفتاح Claude أو ChatGPT أو Gemini.",
-  login_required:"محتاج تدخل على سيرفر نسيم: زرار الدرع ← مصدر الذكاء ← دخول.",
+  login_required:"نسيم محتاج يتفعّل على الموبايل ده الأول: اطلب تفعيل، وأول ما صاحبه يوافق هيشتغل.",
   audio_unavailable:"تفريغ الفويس محتاج مفتاح Gemini في وضع مفاتيحي. لحد كده انسخ نص الرسالة والصقه.",
   bad_key:"المفتاح اترفض. راجعه من زرار الدرع ← مصدر الذكاء.",
   upstream_error:"الخدمة ردت بخطأ. جرّب تاني، أو غيّر مصدر الذكاء من الإعدادات.",
@@ -1289,7 +1289,8 @@ async function send(text, source = "text"){
   S.messages.push(agent);
   busy = false; abortCtl = null;
   render(); scrollDown(); store.save();
-  if (["no_key","bad_key","login_required"].includes(agent.error)) openSettings();
+  if (agent.error === "login_required" && window.NASEM_APP && window.NASEM_APP.managed && window.NASEM_APP.managed()) openActivation();
+  else if (["no_key","bad_key","login_required"].includes(agent.error)) openSettings();
   if (!agent.error) speak(agent.text, source === "voice");
 }
 
@@ -1361,6 +1362,11 @@ function errText(e, code){
   if (code === "quota_daily"){
     const when = e && e.resetAt ? new Intl.DateTimeFormat("ar-EG", {weekday:"long", hour:"numeric", minute:"2-digit"}).format(new Date(e.resetAt)) : "الساعة 10 الصبح";
     return `خلص الحد المجاني اليومي بتاع Gemini (حوالي 20 رسالة لكل موديل). بيرجع ${when}. لحد كده: الديمو شغال على اشتراكك، أو ضيف مفتاح تاني من مصدر الذكاء.`;
+  }
+  if (code === "upstream_error"){
+    const st = ((e && e.message) || "").match(/\b(4\d\d|5\d\d)\b/);
+    if (st && /^5/.test(st[1])) return `خدمة الذكاء زحمة دلوقتي (${st[1]}). جرّبت أكتر من موديل ومنفعش. اضغط "جرّب تاني" بعد شوية.`;
+    if (st) return `خدمة الذكاء رفضت الطلب (${st[1]}). لو اتكرر، ابعتلي الرقم ده.`;
   }
   return FALLBACK[code] || FALLBACK.llm_unavailable;
 }
@@ -1457,6 +1463,11 @@ function renderChat(){
     }
     if (m.emergency){ thread.append(h("div",{class:"msg agent"}, emergencyCard(m.text))); continue; }
     const wrap = h("div",{class:"msg agent" + (m.error ? " error" : "")}, h("div",{class:"bubble"}, m.text));
+    if (m.error && m === lastAgentMessage() && !["no_key","bad_key","login_required","quota_daily"].includes(m.error)){
+      const idx = S.messages.indexOf(m), prev = idx > 0 ? S.messages[idx - 1] : null;
+      if (prev && prev.role === "user" && !prev.attachment) wrap.append(h("div",{class:"fb-row"}, h("button",{class:"fb", onclick:() => {
+        if (busy) return; S.messages.splice(idx - 1, 2); render(); send(prev.text, prev.source || "text"); }}, "🔄 جرّب تاني")));
+    }
     if (m.provider && window.NASEM_APP) wrap.append(h("div",{class:"meta"}, "الرد من " + window.NASEM_APP.PROVIDER_NAMES[m.provider]));
     if (m.local) wrap.append(h("div",{class:"meta"}, "رد فوري من الموبايل، من غير ذكاء ولا نت"));
     if (m.privacy){
@@ -2184,7 +2195,8 @@ async function processAttachment(action, a, question, userMsgId){
   if (!agent.error && window.NASEM_APP) agent.provider = window.NASEM_APP.state.lastProvider;
   S.messages.push(agent);
   busy = false; abortCtl = null; render(); scrollDown(); store.save();
-  if (["no_key","bad_key","login_required"].includes(agent.error)) openSettings();
+  if (agent.error === "login_required" && window.NASEM_APP && window.NASEM_APP.managed && window.NASEM_APP.managed()) openActivation();
+  else if (["no_key","bad_key","login_required"].includes(agent.error)) openSettings();
   if (!agent.error) speak(agent.text);
 }
 
@@ -2477,7 +2489,7 @@ function cloudVoiceSettings(){
 
 /* ---------------- identity: "تعرّف على نسيم" ---------------- */
 const APP = {
-  name: "نسيم", nameLatin: "NASEM AI", version: "إصدار 2.3 (تطبيق)",
+  name: "نسيم", nameLatin: "NASEM AI", version: "إصدار 3.1 (تطبيق)",
   owner: "أشرف قاسم",
   year: 2026,
   can: [
@@ -2555,7 +2567,7 @@ function aiSettings(){
     h("button",{class:"btn ghost", onclick: async e => {
       const b = e.currentTarget; b.textContent = "بجرّب…";
       try{ await A.test(id); b.textContent = "شغال ✓"; }
-      catch(x){ b.textContent = x.code === "bad_key" ? "المفتاح مرفوض" : x.code === "no_key" ? "حط المفتاح الأول" : x.code === "rate_limited" ? "وصلت للحد. استنى دقيقة وجرّب" : x.model ? `الموديل "${x.model}" مش شغال (${x.code || "خطأ"}${/\b(40[034]|429|5\d\d)\b/.test(x.message || "") ? " " + (x.message.match(/\b(40[034]|429|5\d\d)\b/) || [""])[0] : ""})` : "مش شغال (" + (x.code || "خطأ") + ")"; }
+      catch(x){ b.textContent = x.code === "bad_key" ? (/\b403\b/.test(x.message || "") && !/invalid|api.?key/i.test(x.message || "") ? "ممنوع (403): غالباً الخدمة مش متاحة من شبكتك أو منطقتك" : "المفتاح مرفوض: انسخه تاني كامل") : x.code === "no_key" ? "حط المفتاح الأول" : x.code === "rate_limited" ? "وصلت للحد. استنى دقيقة وجرّب" : x.model ? `الموديل "${x.model}" مش شغال (${x.code || "خطأ"}${/\b(40[034]|429|5\d\d)\b/.test(x.message || "") ? " " + (x.message.match(/\b(40[034]|429|5\d\d)\b/) || [""])[0] : ""})` : "مش شغال (" + (x.code || "خطأ") + ")"; }
     }}, "جرّب الاتصال"));
   const G = A.gateway, g = G.get();
   const modeSeg = h("div",{class:"seg"}, [["gateway","سيرفر نسيم"],["keys","مفاتيحي (تجربة)"]].map(([v, t]) =>
@@ -2565,11 +2577,14 @@ function aiSettings(){
     const email = h("input",{class:"voice-select", type:"email", dir:"ltr", placeholder:"email"}); email.value = g.email || "";
     const pass = h("input",{class:"voice-select", type:"password", dir:"ltr", placeholder:"password"});
     const status = h("div",{class:"att-note"});
+    const managed = A.managed && A.managed();
     const box = g.access
       ? h("div",{}, h("div",{class:"status ok"}, "داخل كـ " + (g.email || "مستخدم")),
           h("div",{class:"row"},
             h("button",{class:"btn ghost", onclick: async e => { const b = e.currentTarget; b.textContent = "بجرّب…"; try{ await A.test("gateway"); b.textContent = "شغال ✓"; }catch(x){ b.textContent = "مش شغال (" + (x.code || "خطأ") + ")"; } }}, "جرّب الاتصال"),
             h("button",{class:"btn ghost", onclick: async () => { await G.logout(); openSettings(); }}, "خروج")))
+      : managed ? h("div",{}, h("div",{class:"att-note"}, "نسيم ده بيشتغل بموافقة صاحبه."),
+          h("div",{class:"row"}, h("button",{class:"btn primary", onclick:() => openActivation()}, A.activation.pending() ? "حالة طلب التفعيل" : "📨 اطلب تفعيل")))
       : h("div",{},
           h("label",{class:"ai-field"}, h("span",{class:"pref-label"}, "رابط السيرفر"), url),
           h("label",{class:"ai-field"}, h("span",{class:"pref-label"}, "الإيميل"), email),
@@ -3642,11 +3657,17 @@ function localAnswer(raw){
   const now = new Date(), et = egyptTime();
   const todayList = () => S.commitments.filter(c => c.status === "pending" && c.approved_at && c.due && dayKey(new Date(c.due)) === dayKey(now)).sort((a, b) => a.due.localeCompare(b.due));
   // greetings: answer like a person, and add today's essentials when there are any
-  if (/^(صباح (الخير|الفل|النور|الورد)|مساء (الخير|الفل|النور)|السلام عليكم|سلام عليكم|اهلا|أهلا|أهلاً|هاي|ازيك|إزيك|عامل ايه|عامل إيه)( يا نسيم)?$/.test(t)){
-    const greet = /^صباح/.test(t) ? pickOne(["صباح النور", "صباح الفل", "يا صباح الخير"]) : /^مساء/.test(t) ? pickOne(["مساء النور", "مساء الفل"]) : /سلام/.test(t) ? "وعليكم السلام" : pickOne(["أهلاً بيك", "أهلاً، تمام الحمد لله"]);
-    const items = todayList();
-    const extra = items.length ? ` النهاردة عندك ${items.length === 1 ? "حاجة واحدة" : items.length + " حاجات"}، أولها ${items[0].title} ${fmtTime(items[0].due)}.` : " تحب نعمل إيه النهاردة؟";
-    return `${greet}${name ? " يا " + name : ""}.${extra}`;
+  const GREET = "(صباح (الخير|الفل|النور|الورد)|مساء (الخير|الفل|النور)|السلام عليكم|سلام عليكم|اهلا|أهلا|أهلاً|هاي|ازيك|إزيك|ازيّك|عامل ايه|عامل إيه|اخبارك ايه|أخبارك إيه|اخبارك|أخبارك)";
+  const tg = t.replace(/^(يا |ياا )?نسيم[،,]?\s*/, "").replace(/\s*(يا )?نسيم$/, "").trim();
+  if (new RegExp(`^${GREET}( ${GREET})?( النهاردة| النهارده)?$`).test(tg)){
+    const greet = /^صباح/.test(tg) ? pickOne(["صباح النور", "صباح الفل", "يا صباح الخير"]) : /^مساء/.test(tg) ? pickOne(["مساء النور", "مساء الفل"]) : /سلام/.test(tg) ? "وعليكم السلام" : /ازيك|إزيك|عامل|اخبار|أخبار/.test(tg) ? pickOne(["الحمد لله تمام، وإنت عامل إيه؟", "تمام الحمد لله، أخبارك إنت؟", "كله تمام، وإنت؟"]) : pickOne(["أهلاً بيك", "أهلاً، تمام الحمد لله"]);
+    const items = todayList(), yaName = name ? " يا " + name : "";
+    const agenda = items.length ? `النهاردة عندك ${items.length === 1 ? "حاجة واحدة" : items.length + " حاجات"}، أولها ${items[0].title} ${fmtTime(items[0].due)}.` : "";
+    if (/ازيك|إزيك|عامل|اخبار|أخبار/.test(tg) && !/^(صباح|مساء|سلام|السلام)/.test(tg)){   // "how are you": answer, ask back, then the day
+      const base = pickOne([`الحمد لله تمام${yaName}، وإنت عامل إيه؟`, `تمام الحمد لله${yaName}، أخبارك إنت إيه؟`, `كله تمام${yaName}، وإنت؟`]);
+      return agenda ? `${base} وعلى فكرة، ${agenda}` : base;
+    }
+    return `${greet}${yaName}.${agenda ? " " + agenda : " تحب نعمل إيه النهاردة؟"}`;
   }
   if (/^(شكرا|شكراً|متشكر|متشكرين|تسلم|تسلم ايدك|تسلم إيدك|ميرسي|thanks|thank you)( يا نسيم)?( جدا| جداً| أوي)?$/i.test(t))
     return pickOne(["العفو، أي وقت.", "تحت أمرك.", "ولا يهمك، أنا هنا."]);
@@ -3713,6 +3734,57 @@ function learningSection(){
   return box;
 }
 
+/* ================= activation: the owner approves each phone ================= */
+let actTimer = null;
+function openActivation(){
+  const A = window.NASEM_APP; if (!A || !A.activation) return;
+  const act = A.activation, p = act.pending();
+  clearInterval(actTimer);
+  const status = h("div",{class:"att-note", "aria-live":"polite"});
+  const code = h("div",{class:"att-note"}, `رقم جهازك: …${act.deviceCode()}`);
+  const check = async (quiet) => {
+    try{
+      const r = await act.check();
+      if (r.status === "approved"){ clearInterval(actTimer); closeSheet(); toast("نسيم اتفعّل على الموبايل ده 🎉"); render(); return; }
+      if (r.status === "rejected"){ clearInterval(actTimer); toast("الطلب اترفض" + (r.note ? ": " + r.note : ".")); openActivation(); return; }
+      if (r.status === "none"){ clearInterval(actTimer); openActivation(); return; }
+      if (!quiet) status.textContent = "لسه مستني موافقة المالك.";
+    }catch(e){ if (!quiet) status.textContent = "مش قادر أوصل للسيرفر دلوقتي. جرّب بعد شوية."; }
+  };
+  if (p){
+    sheet.replaceChildren(h("h2",{id:"sheetTitle"}, "طلبك اتبعت ✓"),
+      h("p",{}, `طلب تفعيل باسم ${p.name} اتبعت لصاحب نسيم. أول ما يوافق، نسيم هيشتغل هنا لوحده.`), code, status,
+      h("div",{class:"row"}, h("button",{class:"btn primary", onclick:() => check(false)}, "اتأكد دلوقتي"),
+        h("button",{class:"btn ghost", onclick:() => { localStorage.removeItem("nasem-activation"); openActivation(); }}, "ابعت طلب جديد")),
+      h("p",{class:"fine"}, "بيتأكد لوحده كل 20 ثانية وإنت فاتح الشاشة دي."));
+    actTimer = setInterval(() => check(true), 20000);
+  } else {
+    const nameIn = h("input",{class:"voice-select", placeholder:"اسمك", autocomplete:"name"});
+    const phoneIn = h("input",{class:"voice-select", type:"tel", dir:"ltr", placeholder:"01xxxxxxxxx", autocomplete:"tel"});
+    sheet.replaceChildren(h("h2",{id:"sheetTitle"}, "تفعيل نسيم"),
+      h("p",{}, "نسيم بيشتغل بموافقة صاحبه. ابعت طلبك، وأول ما يوافق هيشتغل على الموبايل ده."),
+      h("label",{class:"ai-field"}, h("span",{class:"pref-label"}, "الاسم"), nameIn),
+      h("label",{class:"ai-field"}, h("span",{class:"pref-label"}, "رقم الموبايل"), phoneIn), code, status,
+      h("div",{class:"row"}, h("button",{class:"btn primary", onclick: async () => {
+        if (nameIn.value.trim().length < 2 || phoneIn.value.replace(/\D/g, "").length < 8){ status.textContent = "اكتب اسمك ورقم موبايلك."; return; }
+        status.textContent = "بابعت…";
+        try{ await act.request(nameIn.value, phoneIn.value); toast("الطلب اتبعت."); openActivation(); }
+        catch(e){ status.textContent = ({already_active:"الموبايل ده متفعّل أصلاً.", invalid_phone:"رقم الموبايل شكله غلط.", activation_closed:"التفعيل مقفول دلوقتي.", too_many_requests:"فيه طلبات كتير، جرّب بعد شوية."})[e.code] || "مش قادر أوصل للسيرفر. جرّب بعد شوية."; }
+      }}, "📨 اطلب تفعيل")),
+      h("p",{class:"fine"}, "بيتبعت للمالك: اسمك ورقمك ونوع الموبايل ورقم الجهاز بس. كلامك وذاكرتك بيفضلوا على موبايلك."));
+  }
+  sheetBack.hidden = false;
+}
+async function activationOnBoot(){
+  const A = window.NASEM_APP; if (!A || !A.ready) return;
+  await A.ready;
+  if (!A.managed() || A.gateway.get().access || A.getConfig().mode !== "gateway") return;
+  if (A.activation.pending()){
+    try{ const r = await A.activation.check(); if (r.status === "approved"){ toast("نسيم اتفعّل على الموبايل ده 🎉"); render(); return; } }catch(e){}
+  }
+  if (S.consent) openActivation();
+}
+
 /* ---------------- misc ---------------- */
 let toastTimer;
 function toast(t){ const el = document.getElementById("toast"); el.textContent = t; el.classList.add("show"); clearTimeout(toastTimer); toastTimer = setTimeout(() => el.classList.remove("show"), 2600); }
@@ -3728,6 +3800,7 @@ render();
 store.init().then(() => {
   ready = true; render(); scrollDown();
   handleShared();
+  setTimeout(activationOnBoot, 400);
   if (!S.consent) openConsent(); else if (!S.profile.onboarded) openQuickSetup(); else input.focus({preventScroll:true});
 });
 </script>
