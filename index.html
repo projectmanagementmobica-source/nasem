@@ -3978,6 +3978,7 @@ function showGate(){
   g.replaceChildren(h("div",{class:"gate-card"}, head,
     h("h2",{}, "تفعيل نسيم"),
     h("p",{}, "نسيم بيشتغل بموافقة صاحبه. ابعت بياناتك، وأول ما يوافق هيفتح على الموبايل ده."),
+    ownerBox(),
     nameL, phoneL, mailL, h("label",{class:"ai-field"}, h("span",{class:"pref-label"}, "بتشتغل إيه / عايز نسيم في إيه؟ (اختياري)"), purposeIn),
     termsBox, h("label",{class:"toggle", for:"gate-terms"}, terms, h("span",{}, "قريت ووافقت على الخصوصية وشروط الاستخدام")),
     status,
@@ -3991,6 +3992,27 @@ function showGate(){
         activation_closed:"التفعيل مقفول دلوقتي.", too_many_requests:"فيه طلبات كتير، جرّب بعد شوية.", terms_required:"لازم توافق على الشروط."})[e.code] || "مش قادر أوصل للسيرفر. اتأكد من النت وجرّب تاني."; }
     }}, "📨 ابعت طلب التفعيل"),
     h("div",{class:"gate-code"}, `رقم جهازك: …${act.deviceCode()}`)));
+}
+function ownerBox(){
+  const A = window.NASEM_APP;
+  const em = h("input",{class:"voice-select", type:"email", dir:"ltr", autocomplete:"username", placeholder:"email"});
+  const pw = h("input",{class:"voice-select", type:"password", dir:"ltr", autocomplete:"current-password", placeholder:"password"});
+  const st = h("div",{class:"gate-status", "aria-live":"polite"});
+  const go = async () => {
+    if (!em.value.trim() || !pw.value){ st.textContent = "اكتب الإيميل وكلمة السر."; return; }
+    st.textContent = "بدخل…";
+    try{
+      await A.gateway.login(A.managedUrl(), em.value.trim(), pw.value); pw.value = "";
+      localStorage.removeItem("nasem-activation");
+      closeGate(); S.consent = S.consent || {version: CONSENT_VERSION, at: nowISO()}; store.save(); render();
+      toast("أهلاً يا صاحب نسيم 🎉"); if (!S.profile.onboarded) openQuickSetup();
+    }catch(x){ st.textContent = x.code === "bad_login" ? "الإيميل أو كلمة السر غلط." : "مش قادر أوصل للسيرفر دلوقتي. جرّب تاني."; }
+  };
+  pw.addEventListener("keydown", e => { if (e.key === "Enter") go(); });
+  return h("details",{class:"gate-terms gate-owner"}, h("summary",{}, "🔑 أنا صاحب نسيم — دخول مباشر"),
+    h("label",{class:"ai-field"}, h("span",{class:"pref-label"}, "الإيميل"), em),
+    h("label",{class:"ai-field"}, h("span",{class:"pref-label"}, "كلمة السر"), pw),
+    st, h("button",{class:"btn primary", onclick: go}, "دخول المالك"));
 }
 
 /* ================= activation: the owner approves each phone ================= */
