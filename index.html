@@ -5024,15 +5024,29 @@ function accountsSection(){
 }
 
 /* ================= الجمعية الذكية: للمشترك وللي عامل الجمعية ================= */
+
+const gamYMD = d => localISO(d).slice(0, 10);
+const gamDay = d => fmtDay(gamYMD(d) + "T12:00");
 const gamMonthly = g => toNumber(g.monthly) || 0;
-const gamN = g => g.role === "organizer" ? (g.people || []).length : (g.members || 0);
 function gamIdx(g, d = new Date()){ if (!g.start) return null; const [y, mo] = g.start.split("-").map(Number); return (d.getFullYear() - y) * 12 + (d.getMonth() + 1 - mo); }
 const gamMonthDate = (g, i) => { const [y, mo] = g.start.split("-").map(Number); return new Date(y, mo - 1 + i, Math.min(g.payDay || 1, 28), 12); };
+/* Organizer view: every member has his own monthly share and his own payout (استحقاق) date. */
+const gamAmt = (g, p) => toNumber(p && p.amount) || gamMonthly(g);
+const gamPayDate = (g, p, i) => p && p.payoutDate ? new Date(p.payoutDate + "T12:00") : gamMonthDate(g, i);
+const gamPayIdx = (g, p, i) => gamIdx(g, gamPayDate(g, p, i));
+const gamN = g => g.role === "organizer" ? Math.max((g.people || []).length, ...(g.people || []).map((p, i) => (gamPayIdx(g, p, i) ?? i) + 1)) : (g.members || 0);
+const gamPot = g => g.role === "organizer" ? gamMonthIn(g) : gamMonthly(g) * gamN(g);
+const gamPayout = (g, p) => gamAmt(g, p) * gamN(g);   // fair share: what he pays over the whole cycle
+const gamMonthIn = g => (g.people || []).reduce((t, p) => t + gamAmt(g, p), 0);
+const gamMyPayout = g => { const me = g.role === "organizer" ? (g.people || []).find(p => p.isMe) : null; return me ? gamPayout(g, me) : gamPot(g); };
+const gamReceivers = (g, i) => (g.people || []).filter((p, j) => gamPayIdx(g, p, j) === i);
+const gamWho = p => p.isMe ? "إنت" : p.name;
+const gamRecText = (g, i) => { const r = gamReceivers(g, i); return r.length ? r.map(p => `${gamWho(p)} ${fmtMoney(gamPayout(g, p))} (${gamDay(gamPayDate(g, p, g.people.indexOf(p)))})`).join(" و") : "مفيش حد"; };
 const gamMK = (g, i) => monthKey(gamMonthDate(g, i));
 const gamPaidRead = (g, i) => ((g.paid || {})[gamMK(g, i)]) || {};
 function gamMark(g, i, who, val = true){ g.paid = g.paid || {}; const k = gamMK(g, i); g.paid[k] = g.paid[k] || {}; if (val) g.paid[k][who] = nowISO(); else delete g.paid[k][who]; }
 const gamMeKey = g => g.role === "organizer" ? ((g.people || []).find(p => p.isMe) || {}).id : "me";
-function gamSync(g){ g.members = (g.people || []).length; const me = (g.people || []).findIndex(p => p.isMe); g.myTurn = me >= 0 ? me + 1 : null; }
+function gamSync(g){ g.members = (g.people || []).length; const me = (g.people || []).findIndex(p => p.isMe); g.myTurn = me >= 0 ? (gamPayIdx(g, g.people[me], me) ?? me) + 1 : null; }
 const gamTitle = g => /^جمعي/.test(arNorm(g.name)) ? g.name : "جمعية " + g.name;
 const gamDueLabel = g => g.role === "organizer" && !(g.people || []).some(p => p.isMe) ? `جمع ${g.name}` : `قسط ${g.name}`;
 function gamStatus(g){
@@ -5073,13 +5087,19 @@ function parseGam(text){
   return null;
 }
 function gamScheduleText(g){
-  const lines = (g.people || []).map((p, i) => `${fmtN(i + 1)}. ${fmtMonthAr(gamMonthDate(g, i))}: ${p.isMe ? "أنا" : p.name}`);
-  return [`جدول ${gamTitle(g)}: ${fmtMoney(gamMonthly(g))} في الشهر، والقبض يوم ${fmtN(g.payDay || 1)}`, ...lines,
+  const ppl = (g.people || []).map((p, i) => ({p, d: gamPayDate(g, p, i)})).sort((a, b) => a.d - b.d);
+  const lines = ppl.map(({p, d}, i) => `${fmtN(i + 1)}. ${gamDay(d)}: ${p.isMe ? "أنا" : p.name} — قسطه ${fmtMoney(gamAmt(g, p))} ويقبض ${fmtMoney(gamPayout(g, p))}`);
+  return [`جدول ${gamTitle(g)}: القسط بيتدفع يوم ${fmtN(g.payDay || 1)} من كل شهر (${fmtN(gamN(g))} شهور)`, ...lines,
     g.drawnAt ? `(الأدوار اتعملت بالقرعة يوم ${fmtShort(g.drawnAt)})` : null].filter(Boolean).join("\n");
 }
 function gamReminderText(g){
-  const st = gamStatus(g), rec = st.state === "running" ? (g.people || [])[st.i] : null;
-  return `تذكير صغير 🌷 قسط ${gamTitle(g)} (${fmtMoney(gamMonthly(g))}) ميعاده يوم ${fmtN(g.payDay || 1)}. اللي لسه ما بعتش ياريت يبعته.${rec ? ` الشهر ده الدور على ${rec.isMe ? "المنظّم" : rec.name}.` : ""}`;
+  const st = gamStatus(g), rec = st.state === "running" ? gamReceivers(g, st.i) : [];
+  const same = (g.people || []).every(p => gamAmt(g, p) === gamMonthly(g));
+  return `تذكير صغير 🌷 قسط ${gamTitle(g)}${same ? ` (${fmtMoney(gamMonthly(g))})` : ""} ميعاده يوم ${fmtN(g.payDay || 1)}. اللي لسه ما بعتش ياريت يبعته.${rec.length ? ` الشهر ده الدور على ${rec.map(p => p.isMe ? "المنظّم" : p.name).join(" و")}.` : ""}`;
+}
+function gamPersonText(g, p){
+  const i = g.people.indexOf(p), d = gamPayDate(g, p, i);
+  return `أهلاً ${p.name} 🌷 قسطك في ${gamTitle(g)} ${fmtMoney(gamAmt(g, p))}، وميعاده يوم ${fmtN(g.payDay || 1)} من كل شهر. وميعاد قبضك ${gamDay(d)} إن شاء الله (${fmtMoney(gamPayout(g, p))}).`;
 }
 function localGam(text){
   const x = parseGam(text); if (!x) return null;
@@ -5095,7 +5115,7 @@ function localGam(text){
     if (st.state === "unknown") return `محتاج أعرف جمعية ${g.name} بدأت إمتى. ظبطها من ذاكرتي ← الجمعيات.`;
     gamMark(g, st.i, gamMeKey(g));
     let k = 0; for (let i = 0; i <= st.i; i++) if (gamPaidRead(g, i)[gamMeKey(g)]) k++;
-    const total = gamMonthly(g) * st.N, turn = g.myTurn;
+    const meP = g.role === "organizer" ? (g.people || []).find(p => p.isMe) : null, total = meP ? gamPayout(g, meP) : gamPot(g), turn = g.myTurn;
     const tail = turn ? (turn - 1 > st.i ? ` قبضك ${fmtMonthAr(gamMonthDate(g, turn - 1))} (${fmtMoney(total)}).` : turn - 1 === st.i ? ` والشهر ده دورك تقبض ${fmtMoney(total)} 🎉` : "") : "";
     return `سجلت إنك دفعت قسط ${g.name} لشهر ${fmtMonthAr(gamMonthDate(g, st.i))}. دفعت ${fmtN(k)} من ${fmtN(st.N)} أقساط.${tail}`;
   }
@@ -5106,8 +5126,9 @@ function localGam(text){
     const {g, p} = hit, st = gamStatus(g);
     if (st.state !== "running") return `جمعية ${g.name} ${st.state === "done" ? "خلصت" : "لسه ما بدأتش"}.`;
     gamMark(g, st.i, p.id);
-    const paid = gamPaidRead(g, st.i), left = (g.people || []).filter(q => !paid[q.id]), rec = g.people[st.i];
-    return `تمام، اتسجل قسط ${p.name} لشهر ${fmtMonthAr(gamMonthDate(g, st.i))}. ${left.length ? `فاضل ${fmtN(left.length)}: ${left.map(q => q.isMe ? "إنت" : q.name).join("، ")}.` : "كده الكل دفع ✓"} الشهر ده بيقبض ${rec.isMe ? "إنت" : rec.name} (${fmtMoney(gamMonthly(g) * st.N)}).`;
+    const paid = gamPaidRead(g, st.i), left = (g.people || []).filter(q => !paid[q.id]);
+    const got = g.people.filter(q => paid[q.id]).reduce((t, q) => t + gamAmt(g, q), 0);
+    return `تمام، اتسجل قسط ${p.name} (${fmtMoney(gamAmt(g, p))}) لشهر ${fmtMonthAr(gamMonthDate(g, st.i))}. اتجمع ${fmtMoney(got)} من ${fmtMoney(gamMonthIn(g))}. ${left.length ? `فاضل ${fmtN(left.length)}: ${left.map(q => `${gamWho(q)} ${fmtMoney(gamAmt(g, q))}`).join("، ")}.` : "كده الكل دفع ✓"} الشهر ده بيقبض: ${gamRecText(g, st.i)}.`;
   }
   if (x.op === "unpaid"){
     const r = gamPick(x.s, g => g.role === "organizer");
@@ -5116,7 +5137,7 @@ function localGam(text){
     const g = r.g, st = gamStatus(g); if (st.state !== "running") return `جمعية ${g.name} ${st.state === "done" ? "خلصت" : "لسه ما بدأتش"}.`;
     const paid = gamPaidRead(g, st.i), left = g.people.filter(q => !paid[q.id]);
     if (!left.length) return `كله دفع قسط ${g.name} الشهر ده ✓`;
-    return {text: `لسه ما دفعوش قسط ${g.name} الشهر ده (${fmtN(left.length)} من ${fmtN(st.N)}): ${left.map(q => q.isMe ? "إنت" : q.name).join("، ")}.`, links: [{label: "ابعت تذكير للجروب (من غير أسامي)", url: waLink(null, gamReminderText(g))}]};
+    return {text: `لسه ما دفعوش قسط ${g.name} الشهر ده (${fmtN(left.length)} من ${fmtN(g.people.length)}): ${left.map(q => `${gamWho(q)} ${fmtMoney(gamAmt(g, q))}`).join("، ")}. الناقص ${fmtMoney(left.reduce((t, q) => t + gamAmt(g, q), 0))}.`, links: [{label: "ابعت تذكير للجروب (من غير أسامي)", url: waLink(null, gamReminderText(g))}]};
   }
   if (x.op === "myTurn" || x.op === "turn"){
     const r = gamPick(x.s, () => true);
@@ -5125,13 +5146,13 @@ function localGam(text){
     const g = r.g, st = gamStatus(g);
     if (st.state === "unknown") return `محتاج أعرف جمعية ${g.name} بدأت إمتى.`;
     if (g.role === "organizer" && x.op === "turn"){
-      if (st.state !== "running") return `جمعية ${g.name} ${st.state === "done" ? "خلصت" : `بتبدأ ${fmtMonthAr(gamMonthDate(g, 0))}، وأول واحد بيقبض ${g.people[0] ? g.people[0].name : "؟"}`}.`;
-      const rec = g.people[st.i], nxt = g.people[st.i + 1];
-      return {text: `الشهر ده الدور على ${rec.isMe ? "إنت" : rec.name} (${fmtMoney(gamMonthly(g) * st.N)}).${nxt ? ` الشهر الجاي: ${nxt.isMe ? "إنت" : nxt.name}.` : " وده آخر دور."}`, links: [{label: "ابعت الجدول واتساب", url: waLink(null, gamScheduleText(g))}]};
+      if (st.state !== "running") return `جمعية ${g.name} ${st.state === "done" ? "خلصت" : `بتبدأ ${fmtMonthAr(gamMonthDate(g, 0))}، وأول قبض: ${gamRecText(g, 0)}`}.`;
+      const nxt = gamReceivers(g, st.i + 1).length ? gamRecText(g, st.i + 1) : null;
+      return {text: `الشهر ده بيقبض: ${gamRecText(g, st.i)}.${nxt ? ` الشهر الجاي: ${nxt}.` : st.i + 1 >= st.N ? " وده آخر دور." : ""}`, links: [{label: "ابعت الجدول واتساب", url: waLink(null, gamScheduleText(g))}]};
     }
     if (!g.myTurn) return `مش مسجل دورك في ${g.name}. قولي مثلاً: "دوري في جمعية ${g.name} السابع".`;
     const pd = gamMonthDate(g, g.myTurn - 1), left = g.myTurn - 1 - (st.i ?? 0);
-    return `قبضك في ${g.name} ${fmtMonthAr(pd)}: ${fmtMoney(gamMonthly(g) * st.N)}. ${left > 0 ? `فاضل ${fmtN(left)} ${left === 1 ? "شهر" : "شهور"}.` : left === 0 ? "يعني الشهر ده 🎉" : "وقبضته خلاص."}`;
+    return `قبضك في ${g.name} ${fmtMonthAr(pd)}: ${fmtMoney(gamMyPayout(g))}. ${left > 0 ? `فاضل ${fmtN(left)} ${left === 1 ? "شهر" : "شهور"}.` : left === 0 ? "يعني الشهر ده 🎉" : "وقبضته خلاص."}`;
   }
   return null;
 }
@@ -5145,7 +5166,13 @@ function gamInsights(){
     if (me && !paid[me] && dd <= 2 && dd >= -10)
       out.push({id: "gmp" + g.id + mk, level: dd < 0 ? "warn" : "info", text: `قسط ${g.name} (${fmtMoney(gamMonthly(g))}) ${dd < 0 ? `كان يوم ${fmtN(due.getDate())}` : dd === 0 ? "النهاردة" : `يوم ${fmtN(due.getDate())}`}، ولسه ما سجلتش إنك دفعت.`,
         action: ["دفعت ✓", () => { gamMark(g, st.i, me); render(); store.save(); toast("اتسجل."); }]});
-    if (g.myTurn && g.myTurn - 1 === st.i) out.push({id: "gmt" + g.id + mk, level: "info", text: `الشهر ده دورك تقبض من ${g.name}: ${fmtMoney(gamMonthly(g) * st.N)}.`});
+    if (g.myTurn && g.myTurn - 1 === st.i) out.push({id: "gmt" + g.id + mk, level: "info", text: `الشهر ده دورك تقبض من ${g.name}: ${fmtMoney(gamMyPayout(g))}.`});
+    if (g.role === "organizer") for (const p of g.people || []){
+      if (p.isMe) continue;
+      const pd = gamPayDate(g, p, g.people.indexOf(p)), pdd = Math.round((new Date(pd.toDateString()) - startOfToday()) / 864e5);
+      if (pdd >= 0 && pdd <= 3) out.push({id: "gmr" + g.id + p.id + gamYMD(pd), level: "info", text: `${pdd === 0 ? "النهاردة" : pdd === 1 ? "بكرة" : `يوم ${fmtN(pd.getDate())}`} ميعاد قبض ${p.name} من ${g.name}: ${fmtMoney(gamPayout(g, p))}.`,
+        action: p.phone ? ["بلّغه واتساب", () => openUrl(waLink(p.phone, `أهلاً ${p.name} 🌷 ميعاد قبضك من ${gamTitle(g)} ${pdd === 0 ? "النهاردة" : gamDay(pd)}: ${fmtMoney(gamPayout(g, p))}.`))] : null});
+    }
     if (g.role === "organizer" && dd <= 0){
       const left = (g.people || []).filter(q => !q.isMe && !paid[q.id]);
       if (left.length) out.push({id: "gmu" + g.id + mk + left.length, level: "warn", text: `${fmtN(left.length)} لسه ما دفعوش قسط ${g.name}: ${left.slice(0, 4).map(q => q.name).join("، ")}${left.length > 4 ? "…" : ""}.`,
@@ -5155,6 +5182,58 @@ function gamInsights(){
   return out;
 }
 const gamOpen = new Set();
+/* المنظّم: جدول المشتركين — الاسم، الموبايل، قيمة الاشتراك، وميعاد الاستحقاق (القبض) لكل واحد */
+function gamMembersEditor(g, st){
+  const started = st.state === "running" || st.state === "done";
+  const wrap = h("div",{class: "gam-edit", style: "margin-top:8px"});
+  const save = () => { gamSync(g); render(); store.save(); };
+  const people = (g.people || []).map((p, i) => ({p, i, d: gamPayDate(g, p, i)})).sort((a, b) => a.d - b.d);
+  const dup = {}; for (const {d} of people){ const k = monthKey(d); dup[k] = (dup[k] || 0) + 1; }
+  wrap.append(h("div",{class: "sub", style: "margin-bottom:4px"}, `المشتركين (${fmtN(people.length)}) — بيتجمع ${fmtMoney(gamMonthIn(g))} شهرياً لمدة ${fmtN(gamN(g))} شهور • عدّل أي خانة وهتتحفظ لوحدها`));
+  const bad = []; for (let i = 0; i < gamN(g); i++){ const out = gamReceivers(g, i).reduce((t, p) => t + gamPayout(g, p), 0); if (out > gamMonthIn(g)) bad.push(`${fmtMonthAr(gamMonthDate(g, i))}: القبض ${fmtMoney(out)} والمتجمع ${fmtMoney(gamMonthIn(g))}`); }
+  if (bad.length) wrap.append(h("div",{class: "att-note", style: "color:var(--danger)"}, "⚠️ شهور القبض فيها أكتر من اللي بيتجمع — غيّر ميعاد حد: " + bad.join(" • ")));
+  for (const {p, i, d} of people){
+    const amt = h("input",{class: "voice-select", type: "number", inputmode: "numeric", min: "0", dir: "ltr", style: "max-width:110px", value: String(gamAmt(g, p)), "aria-label": "قيمة الاشتراك"});
+    const due = h("input",{class: "voice-select", type: "date", dir: "ltr", style: "max-width:160px", value: gamYMD(d), "aria-label": "ميعاد الاستحقاق"});
+    const ph = h("input",{class: "voice-select", type: "tel", dir: "ltr", style: "max-width:140px", placeholder: "موبايل", value: p.phone || "", "aria-label": "الموبايل"});
+    amt.onchange = () => { const v = +amt.value; if (v > 0){ p.amount = String(v); save(); } else amt.value = String(gamAmt(g, p)); };
+    due.onchange = () => { if (/^\d{4}-\d{2}-\d{2}$/.test(due.value)){ p.payoutDate = due.value; save(); } };
+    ph.onchange = () => { p.phone = ph.value.replace(/[^\d+]/g, "") || null; save(); };
+    wrap.append(h("div",{class: "card", style: "padding:8px;margin:4px 0"},
+      h("div",{class: "row", style: "justify-content:space-between;align-items:center"},
+        h("b",{}, p.isMe ? "أنا" : p.name, h("small",{style: "color:var(--muted);font-weight:400;margin-inline-start:6px"}, `يقبض ${fmtMoney(gamPayout(g, p))}`), dup[monthKey(d)] > 1 ? h("span",{class: "chip muted", style: "margin-inline-start:6px"}, "نفس الشهر مع حد تاني") : null),
+        h("span",{}, p.phone ? h("a",{class: "link-btn", style: "color:var(--breeze)", href: waLink(p.phone, gamPersonText(g, p)), target: "_blank", rel: "noopener"}, "واتساب") : null,
+          !started ? h("button",{class: "link-btn", style: "color:var(--muted)", "aria-label": "شيل " + p.name, onclick: () => { if (confirm(`أشيل ${p.name} من الجمعية؟`)){ g.people = g.people.filter(x => x !== p); save(); } }}, "×") : null)),
+      h("div",{class: "row", style: "flex-wrap:wrap;gap:6px;align-items:center"},
+        h("label",{class: "ai-field", style: "margin:0"}, h("span",{class: "pref-label"}, "الاشتراك الشهري"), amt),
+        h("label",{class: "ai-field", style: "margin:0"}, h("span",{class: "pref-label"}, "ميعاد الاستحقاق"), due),
+        p.isMe ? null : h("label",{class: "ai-field", style: "margin:0"}, h("span",{class: "pref-label"}, "الموبايل"), ph))));
+  }
+  // add a member
+  const nextFree = (() => { const used = new Set((g.people || []).map((p, i) => gamPayIdx(g, p, i))); let k = 0; while (used.has(k)) k++; return gamMonthDate(g, k); })();
+  const pn = h("input",{class: "voice-select", placeholder: "اسم المشترك"});
+  const pa = h("input",{class: "voice-select", type: "number", inputmode: "numeric", min: "0", dir: "ltr", placeholder: "الاشتراك", value: String(gamMonthly(g) || ""), style: "max-width:110px"});
+  const pd = h("input",{class: "voice-select", type: "date", dir: "ltr", value: gamYMD(nextFree), style: "max-width:160px"});
+  const pp = h("input",{class: "voice-select", type: "tel", dir: "ltr", placeholder: "موبايل (اختياري)", style: "max-width:140px"});
+  const add = () => {
+    const name = pn.value.trim(); if (!name){ toast("اكتب اسم المشترك."); return; }
+    if ((g.people || []).some(x => nameKey(x.name) === nameKey(name)) && !confirm(`فيه ${name} في الجمعية. أضيفه تاني (سهم تاني)؟`)) return;
+    if (!(+pa.value > 0)){ toast("اكتب قيمة الاشتراك."); return; }
+    g.people.push({id: uid(), name, isMe: /^(انا|أنا)$/.test(name), phone: pp.value.replace(/[^\d+]/g, "") || null, amount: String(+pa.value), payoutDate: /^\d{4}-\d{2}-\d{2}$/.test(pd.value) ? pd.value : gamYMD(nextFree)});
+    save(); toast(`${name} اتضاف ✓`);
+  };
+  wrap.append(h("details",{class: "card", style: "margin-top:6px", open: !(g.people || []).length || null}, h("summary",{}, "➕ ضيف مشترك"),
+    h("div",{class: "row", style: "flex-wrap:wrap;gap:6px"}, pn, pa, pd, pp), h("button",{class: "btn primary", onclick: add}, "ضيف")));
+  const row = h("div",{class: "row", style: "flex-wrap:wrap;margin-top:6px"});
+  if (!started) row.append(h("button",{class: "btn ghost", onclick: () => {
+    if (g.people.length < 2 || !confirm("أعمل قرعة عادلة لمواعيد القبض؟ المواعيد الحالية هتتوزع من جديد على الأسامي.")) return;
+    const dates = g.people.map((p, i) => gamYMD(gamPayDate(g, p, i))).sort();
+    const a = g.people.slice(); for (let i = a.length - 1; i > 0; i--){ const r = new Uint32Array(1); crypto.getRandomValues(r); const j = r[0] % (i + 1); [a[i], a[j]] = [a[j], a[i]]; }
+    a.forEach((p, i) => { p.payoutDate = dates[i]; }); g.people = a; g.drawnAt = nowISO(); save(); toast("القرعة اتعملت."); }}, "🎲 قرعة المواعيد"));
+  row.append(h("button",{class: "btn ghost", onclick: () => openUrl(waLink(null, gamScheduleText(g)))}, "ابعت الجدول واتساب"));
+  wrap.append(row);
+  return wrap;
+}
 function gamSection(){
   const box = h("div",{id: "sec-gam"}, h("div",{class: "section-title"}, "🤝 الجمعيات"));
   if (!S.settings.sensitive){ box.append(h("div",{class: "att-note", style: "margin:0 4px"}, "متابعة الأقساط والأدوار والقرعة، للمشترك وللي عامل الجمعية. محتاج تسمح بحفظ المعلومات المالية. ", h("button",{class: "link-btn", style: "color:var(--breeze)", onclick: openSettings}, "الإعدادات"))); return box; }
@@ -5162,19 +5241,21 @@ function gamSection(){
   for (const g of S.ledger.gam3eyas || []){
     const st = gamStatus(g), org = g.role === "organizer", N = st.N, open = gamOpen.has(g.id), me = gamMeKey(g);
     const card = h("div",{class: "mem"},
-      h("div",{class: "k"}, [org ? "إنت المنظّم" : "مشترك", g.monthly ? `${fmtMoney(gamMonthly(g))} في الشهر` : null, N ? `${fmtN(N)} أفراد` : null, g.payDay ? `القبض يوم ${fmtN(g.payDay)}` : null].filter(Boolean).join(" • ")),
+      h("div",{class: "k"}, [org ? "إنت المنظّم" : "مشترك", org ? `${fmtN((g.people || []).length)} مشترك` : g.monthly ? `${fmtMoney(gamMonthly(g))} في الشهر` : null, org ? `بيتجمع ${fmtMoney(gamMonthIn(g))} شهرياً` : N ? `${fmtN(N)} أفراد` : null, g.payDay ? `الدفع يوم ${fmtN(g.payDay)}` : null].filter(Boolean).join(" • ")),
       h("div",{class: "v"}, g.name));
     if (st.state === "running"){
       const paid = gamPaidRead(g, st.i);
       card.append(h("div",{class: "spend-bar", style: "margin:6px 0"}, h("span",{style: `width:${(st.i + 1) / N * 100}%`})));
       card.append(h("div",{class: "sub"}, `شهر ${fmtN(st.i + 1)} من ${fmtN(N)} (${fmtMonthAr(gamMonthDate(g, st.i))})` +
-        (org && g.people[st.i] ? ` • بيقبض: ${g.people[st.i].isMe ? "إنت" : g.people[st.i].name}` : g.myTurn ? ` • قبضك ${fmtMonthAr(gamMonthDate(g, g.myTurn - 1))}` : "")));
+        (org ? ` • بيقبض: ${gamRecText(g, st.i)}` : g.myTurn ? ` • قبضك ${fmtMonthAr(gamMonthDate(g, g.myTurn - 1))}` : "")));
       if (me) card.append(h("div",{class: "foot"}, h("span",{}, paid[me] ? "✓ دفعت قسط الشهر ده" : "لسه ما دفعتش قسط الشهر ده"),
         h("button",{class: "link-btn", style: "color:var(--breeze)", onclick: () => { gamMark(g, st.i, me, !paid[me]); render(); store.save(); }}, paid[me] ? "تراجع" : "دفعت ✓")));
       if (org){
-        card.append(h("div",{class: "chips", style: "margin-top:6px"}, g.people.map((p, i) => h("button",{class: "chip" + (paid[p.id] ? " done" : " muted"), onclick: () => { gamMark(g, st.i, p.id, !paid[p.id]); render(); store.save(); }},
-          `${paid[p.id] ? "✓ " : ""}${p.isMe ? "أنا" : p.name}${i === st.i ? " 🎁" : ""}`))));
-        card.append(h("div",{class: "sub"}, `دفع ${fmtN(g.people.filter(p => paid[p.id]).length)} من ${fmtN(N)} • دوس على الاسم لما يدفع`));
+        const recs = gamReceivers(g, st.i);
+        card.append(h("div",{class: "chips", style: "margin-top:6px"}, g.people.map(p => h("button",{class: "chip" + (paid[p.id] ? " done" : " muted"), onclick: () => { gamMark(g, st.i, p.id, !paid[p.id]); render(); store.save(); }},
+          `${paid[p.id] ? "✓ " : ""}${p.isMe ? "أنا" : p.name} ${fmtMoney(gamAmt(g, p))}${recs.includes(p) ? " 🎁" : ""}`))));
+        const got = g.people.filter(p => paid[p.id]).reduce((t, p) => t + gamAmt(g, p), 0);
+        card.append(h("div",{class: "sub"}, `دفع ${fmtN(g.people.filter(p => paid[p.id]).length)} من ${fmtN(g.people.length)} • اتجمع ${fmtMoney(got)} من ${fmtMoney(gamMonthIn(g))} • دوس على الاسم لما يدفع`));
       }
     } else if (st.state === "notStarted") card.append(h("div",{class: "sub"}, `بتبدأ ${fmtMonthAr(gamMonthDate(g, 0))}`));
     else if (st.state === "done") card.append(h("div",{class: "sub"}, "خلصت ✓"));
@@ -5185,35 +5266,18 @@ function gamSection(){
     }
     foot.append(h("button",{class: "link-btn", onclick: () => { if (confirm(`أمسح ${g.name}؟`)){ S.ledger.gam3eyas = S.ledger.gam3eyas.filter(x => x.id !== g.id); render(); store.save(); } }}, "امسح"));
     card.append(foot);
-    if (org && open){
-      const started = st.state === "running" || st.state === "done";
-      card.append(h("ol",{class: "plain", style: "margin-top:6px"}, (g.people || []).map((p, i) => h("li",{}, `${fmtN(i + 1)}. ${fmtMonthAr(gamMonthDate(g, i))}: ${p.isMe ? "أنا" : p.name} `,
-        !started && i > 0 ? h("button",{class: "link-btn", style: "color:var(--breeze)", onclick: () => { [g.people[i - 1], g.people[i]] = [g.people[i], g.people[i - 1]]; gamSync(g); render(); store.save(); }}, "↑") : null,
-        p.phone ? h("a",{class: "link-btn", style: "color:var(--breeze)", href: waLink(p.phone, gamReminderText(g)), target: "_blank", rel: "noopener"}, "واتساب") : null,
-        !started ? h("button",{class: "link-btn", style: "color:var(--muted)", onclick: () => { g.people = g.people.filter(x => x !== p); gamSync(g); render(); store.save(); }}, "×") : null))));
-      const row = h("div",{class: "row", style: "flex-wrap:wrap;margin-top:6px"});
-      if (!started){
-        const pn = h("input",{class: "voice-select", placeholder: "اسم عضو جديد"}), pp = h("input",{class: "voice-select", type: "tel", placeholder: "موبايل (اختياري)", dir: "ltr", style: "max-width:150px"});
-        row.append(pn, pp, h("button",{class: "btn ghost", onclick: () => { if (!pn.value.trim()) return; g.people.push({id: uid(), name: pn.value.trim(), phone: pp.value.replace(/[^\d+]/g, "") || null}); gamSync(g); render(); store.save(); }}, "ضيف"));
-        row.append(h("button",{class: "btn ghost", onclick: () => {
-          if (g.people.length < 2 || !confirm("أعمل قرعة عادلة للأدوار؟ الترتيب الحالي هيتغير.")) return;
-          const a = g.people.slice(); for (let i = a.length - 1; i > 0; i--){ const r = new Uint32Array(1); crypto.getRandomValues(r); const j = r[0] % (i + 1); [a[i], a[j]] = [a[j], a[i]]; }
-          g.people = a; g.drawnAt = nowISO(); gamSync(g); render(); store.save(); toast("القرعة اتعملت."); }}, "🎲 قرعة الأدوار"));
-      }
-      row.append(h("button",{class: "btn ghost", onclick: () => openUrl(waLink(null, gamScheduleText(g)))}, "ابعت الجدول واتساب"));
-      card.append(row);
-    }
+    if (org && open) card.append(gamMembersEditor(g, st));
     list.append(card);
   }
   if ((S.ledger.gam3eyas || []).length) box.append(list);
   else box.append(h("div",{class: "att-note", style: "margin:0 4px"}, "قول \"دخلت جمعية 1000 في الشهر 10 أفراد وقبضي السابع من أكتوبر\"، أو لو إنت اللي عاملها ضيفها هنا بالأسامي، وأنا أتابع مين دفع ومين عليه الدور."));
   // new جمعية
   const nm = h("input",{class: "voice-select", placeholder: "اسم الجمعية (مثلاً: جمعية الشغل)"});
-  const mo = h("input",{class: "voice-select", type: "number", inputmode: "numeric", min: "0", placeholder: "القسط الشهري", dir: "ltr"});
-  const startIn = h("input",{class: "voice-select", type: "month", dir: "ltr"}); startIn.value = localISO(new Date()).slice(0, 7);
-  const day = h("input",{class: "voice-select", type: "number", inputmode: "numeric", min: "1", max: "28", placeholder: "يوم القبض", dir: "ltr", style: "max-width:110px"});
+  const mo = h("input",{class: "voice-select", type: "number", inputmode: "numeric", min: "0", placeholder: "الاشتراك الشهري (الأساسي)", dir: "ltr"});
+  const startIn = h("input",{class: "voice-select", type: "month", dir: "ltr"}); startIn.value = gamYMD(new Date()).slice(0, 7);
+  const day = h("input",{class: "voice-select", type: "number", inputmode: "numeric", min: "1", max: "28", placeholder: "يوم الدفع", dir: "ltr", style: "max-width:110px"});
   const role = h("select",{class: "voice-select"}, h("option",{value: "member"}, "أنا مشترك"), h("option",{value: "organizer"}, "أنا اللي عامل الجمعية"));
-  const names = h("textarea",{class: "voice-select", rows: "3", placeholder: "أسامي الأعضاء بالترتيب، كل اسم في سطر (اكتب \"أنا\" لو إنت مشترك معاهم)"});
+  const names = h("textarea",{class: "voice-select", rows: "3", placeholder: "أسامي المشتركين بالترتيب (اختياري)، كل اسم في سطر. تقدر تضيفهم بعدين واحد واحد بالاشتراك وميعاد الاستحقاق"});
   const cnt = h("input",{class: "voice-select", type: "number", inputmode: "numeric", min: "2", placeholder: "عدد الأفراد", dir: "ltr"});
   const turn = h("input",{class: "voice-select", type: "number", inputmode: "numeric", min: "1", placeholder: "دوري رقم", dir: "ltr"});
   const memberRow = h("div",{class: "row"}, cnt, turn);
@@ -5223,10 +5287,10 @@ function gamSection(){
     nm, h("div",{class: "row"}, mo, day), h("label",{class: "ai-field"}, h("span",{class: "pref-label"}, "أول شهر"), startIn), role, names, memberRow,
     h("button",{class: "btn primary", onclick: () => {
       if (!nm.value.trim() || !(+mo.value > 0)){ toast("اكتب الاسم والقسط."); return; }
-      const g = {id: uid(), name: nm.value.trim(), monthly: String(+mo.value), start: startIn.value || localISO(new Date()).slice(0, 7), payDay: Math.min(28, Math.max(1, +day.value || 1)), role: role.value, added_at: nowISO(), paid: {}};
+      const g = {id: uid(), name: nm.value.trim(), monthly: String(+mo.value), start: startIn.value || gamYMD(new Date()).slice(0, 7), payDay: Math.min(28, Math.max(1, +day.value || 1)), role: role.value, added_at: nowISO(), paid: {}};
       if (g.role === "organizer"){
         g.people = names.value.split(/[\n،,]+/).map(x => x.trim()).filter(Boolean).map(x => ({id: uid(), name: x, isMe: /^(انا|أنا)$/.test(x), phone: null}));
-        if (g.people.length < 2){ toast("اكتب أسامي الأعضاء (اتنين على الأقل)."); return; }
+        g.people.forEach((p, i) => { p.amount = String(+mo.value); p.payoutDate = gamYMD(gamMonthDate(g, i)); });
         gamSync(g);
       } else { g.members = +cnt.value || null; g.myTurn = +turn.value || null; }
       S.ledger.gam3eyas.push(g); if (g.role === "organizer") gamOpen.add(g.id); render(); store.save(); toast("الجمعية اتسجلت."); }}, "سجّل الجمعية"));
