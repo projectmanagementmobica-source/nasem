@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from typing import Any, Literal, Protocol
 
 import httpx
+import logging
 from anthropic import AsyncAnthropic
 
 from app.core.config import settings
@@ -228,6 +229,9 @@ class GeminiProvider:
                     continue
                 if res.status_code == 404:
                     continue                             # model id not available -> next one
+                if res.status_code in (429, 500, 502, 503, 504) and model != models[-1]:
+                    log.warning("gemini %s busy (%s), trying next model", model, res.status_code)
+                    continue                             # overloaded / rate-limited -> next model
                 break
             else:
                 raise LLMUnavailableError("all free Gemini models are used up for today", retryable=False)
@@ -244,6 +248,8 @@ class GeminiProvider:
             result["_sources"], result["_queries"] = gemini_sources(cand)
         return result
 
+
+log = logging.getLogger(__name__)
 
 _EXHAUSTED: dict[str, str] = {}   # model -> UTC day it ran out (quota resets daily)
 
