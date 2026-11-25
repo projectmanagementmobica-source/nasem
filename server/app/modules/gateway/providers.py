@@ -228,7 +228,10 @@ class GeminiProvider:
 
         async def attempt(payload: dict[str, Any]) -> httpx.Response:
             res: httpx.Response | None = None
+            overloaded = 0
             for model in models:
+                if overloaded >= 2:
+                    break                                # Google is overloaded right now: let the next provider answer fast
                 if model in _gemini_exhausted_today():
                     continue
                 for retry in range(2):           # "high demand" 503s are usually gone a second later
@@ -255,6 +258,8 @@ class GeminiProvider:
                     continue                             # model id not available -> next one
                 if res.status_code in (429, 500, 502, 503, 504):
                     log.warning("gemini %s busy (%s): %s", model, res.status_code, res.text[:240].replace("\n", " "))
+                    if res.status_code >= 500:
+                        overloaded += 1
                     continue                             # overloaded / rate-limited -> next model
                 return res
             if res is None:
@@ -361,7 +366,10 @@ class GroqProvider:
         http = self._http or httpx.AsyncClient(timeout=settings.gateway_timeout_seconds)
         last = 0
         try:
-            for model in dict.fromkeys([settings.groq_model_quick if call.tier == "quick" else settings.groq_model_main, settings.groq_model_main, settings.groq_model_quick]):
+            live = await _groq_live_models(http, settings.groq_api_key.get_secret_value())
+            wanted = [settings.groq_model_quick if call.tier == "quick" else settings.groq_model_main, settings.groq_model_main, settings.groq_model_quick]
+            order = [m for m in dict.fromkeys(wanted + live) if m and (not live or m in live)]
+            for model in order[:5]:
                 try:
                     res = await http.post("https://api.groq.com/openai/v1/chat/completions",
                                           headers={"authorization": f"Bearer {settings.groq_api_key.get_secret_value()}"},
@@ -371,7 +379,10 @@ class GroqProvider:
                     raise LLMUnavailableError(f"groq connection: {exc}", retryable=True) from exc
                 if res.status_code == 200:
                     data = res.json()
-                    return parse_json_object(str(((data.get("choices") or [{}])[0].get("message") or {}).get("content") or ""))
+                    out = parse_json_object(str(((data.get("choices") or [{}])[0].get("message") or {}).get("content") or ""))
+                    if call.web_search:
+                        out["_no_search"] = True     # Groq answers from the model's knowledge: no verified sources
+                    return out
                 last = res.status_code
                 if res.status_code not in (429, 404):
                     break
@@ -379,6 +390,26 @@ class GroqProvider:
             if self._http is None:
                 await http.aclose()
         raise _http_error(last or 503)
+
+
+_GROQ_LIVE: dict[str, Any] = {"at": 0.0, "models": []}
+
+
+async def _groq_live_models(http: httpx.AsyncClient, key: str) -> list[str]:
+    """Chat models this Groq key can use now (ids change over time). Cached 6 hours per instance."""
+    import time
+    if _GROQ_LIVE["models"] and time.time() - _GROQ_LIVE["at"] < 6 * 3600:
+        return list(_GROQ_LIVE["models"])
+    try:
+        res = await http.get("https://api.groq.com/openai/v1/models", headers={"authorization": f"Bearer {key}"})
+        if res.status_code == 200:
+            ids = [str(m.get("id", "")) for m in res.json().get("data", []) if m.get("active", True)]
+            ids = [i for i in ids if i and not re.search(r"whisper|tts|guard|embed|playai|orpheus|distil|prompt", i, re.I)]
+            big = lambda i: (0 if re.search(r"gpt-oss-120b|70b|maverick|kimi|qwen3-32b", i) else 1, i)
+            _GROQ_LIVE["at"], _GROQ_LIVE["models"] = time.time(), sorted(ids, key=big)[:8]
+    except (httpx.HTTPError, ValueError):
+        pass
+    return list(_GROQ_LIVE["models"])
 
 
 def decode_image(media_type: str, data_b64: str) -> ImagePart:
