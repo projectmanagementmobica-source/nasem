@@ -209,7 +209,15 @@ class GeminiProvider:
         else:
             body["generationConfig"] = {"responseMimeType": "application/json"}
         first = (settings.gemini_model_quick if call.tier == "quick" else "") or settings.gemini_model_main or settings.gemini_model_quick
-        models = list(dict.fromkeys([first, settings.gemini_model_main, *settings.gemini_fallback_models]))
+        http0 = self._http or httpx.AsyncClient(timeout=settings.gateway_timeout_seconds)
+        try:
+            live = await _gemini_live_models(http0, settings.gemini_api_key.get_secret_value())
+        finally:
+            if self._http is None:
+                await http0.aclose()
+        models = list(dict.fromkeys([first, settings.gemini_model_main, *settings.gemini_fallback_models, *live]))
+        if live:   # skip ids Google no longer serves (e.g. retired model families)
+            models = [m for m in models if m in live] or live
         models = [m for m in models if m and m not in _gemini_exhausted_today()]
         if not models:
             raise LLMUnavailableError("all free Gemini models are used up for today", retryable=False)
@@ -250,6 +258,43 @@ class GeminiProvider:
 
 
 log = logging.getLogger(__name__)
+
+_LIVE: dict[str, Any] = {"at": 0.0, "models": []}
+
+
+def _rank_gemini(name: str) -> tuple[int, float, int]:
+    import re as _re
+    m = _re.search(r"gemini-(\d+(?:\.\d+)?)", name)
+    ver = float(m.group(1)) if m else 0.0
+    return (1 if "preview" in name or "exp" in name else 0, -ver, 1 if "lite" in name else 0)
+
+
+async def _gemini_live_models(http: httpx.AsyncClient, key: str) -> list[str]:
+    """Text 'flash' models this key can call right now, best first. Cached for 6 hours per instance."""
+    import time
+    if _LIVE["models"] and time.time() - _LIVE["at"] < 6 * 3600:
+        return list(_LIVE["models"])
+    try:
+        res = await http.get("https://generativelanguage.googleapis.com/v1beta/models",
+                             headers={"x-goog-api-key": key}, params={"pageSize": 200})
+        if res.status_code != 200:
+            return list(_LIVE["models"])
+        names = []
+        for mdl in res.json().get("models", []):
+            name = str(mdl.get("name", "")).removeprefix("models/")
+            if "generateContent" not in (mdl.get("supportedGenerationMethods") or []):
+                continue
+            if not name.startswith("gemini-") or "flash" not in name:
+                continue
+            if any(x in name for x in ("image", "tts", "audio", "live", "embedding", "thinking", "computer")):
+                continue
+            names.append(name)
+        names.sort(key=_rank_gemini)
+        _LIVE["at"], _LIVE["models"] = time.time(), names[:6]
+    except (httpx.HTTPError, ValueError):
+        pass
+    return list(_LIVE["models"])
+
 
 _EXHAUSTED: dict[str, str] = {}   # model -> UTC day it ran out (quota resets daily)
 

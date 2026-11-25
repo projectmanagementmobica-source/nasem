@@ -1607,7 +1607,7 @@ function renderChat(){
       : l.url === "#say" ? h("button",{class:"fb", onclick:openSayAll}, l.label)
       : /^#research:/.test(l.url) ? h("button",{class:"fb", onclick:() => startResearch(l.url.slice(10))}, l.label)
       : h("a",{class:"fb", href:l.url, target: /^tel:/.test(l.url) ? null : "_blank", rel:"noopener"}, l.label))));
-    if (m.privacy){
+    if (m.privacy && (m.privacy.hidden || m.privacy.audio || m.privacy.image)){
       const box = h("div",{class:"sent", hidden:true}, h("div",{class:"sent-label"}, "اللي وصل لـ Claude من رسالتك:"), h("div",{}, m.privacy.sent));
       wrap.append(h("div",{class:"chips"}, h("span",{class:"chip lockchip"},
         m.privacy.audio ? "الفويس اتبعت زي ما هو، والإخفاء بيشتغل على النص بس" : m.privacy.image ? "الصورة اتبعتت زي ما هي، والإخفاء بيشتغل على النص بس" : m.privacy.hidden ? `اتخفى ${m.privacy.hidden} ${m.privacy.hidden === 1 ? "تفصيلة" : "تفاصيل"} قبل الإرسال` : "ما لقيتش تفاصيل خاصة معروفة تتخفى",
@@ -5939,6 +5939,11 @@ const RESEARCH_RE = [
   /^(?:ايه|اي)\s+(?:اخر|آخر)\s+((?:اخبار|تطورات|الاخبار|المستجدات)\s+.+)$/,
   [/^(?:قارن|قارنلي|مقارنه)\s+(?:لي\s+)?(?:بين\s+)?(.+)$/, "compare"],
   /^(?:ابحث|ابحثلي|دور|دورلي|فتش)\s+(?:لي\s+)?(?:علي|عن|علي)\s+(.+)$/,
+  // natural price questions: "عايز سعر موبايل فيفو V80" / "سعر غساله توشيبا" / "بكام ايفون 17" / "ايفون 17 بكام"
+  [/^(?:(?:انا\s+)?(?:عايز|عاوز|محتاج|ابغي|نفسي|حابب)\s+(?:اعرف\s+)?)?(?:ايه\s+|كام\s+)?(?:سعر|اسعار|بكام|بكم)\s+(.{3,})$/, "prices"],
+  [/^(.{3,}?)\s+(?:سعره|سعرها|بكام|بكم)(?:\s+(?:دلوقتي|النهارده|في مصر))?$/, "prices"],
+  // natural news questions: "اخبار الدوري" / "ايه اخبار غزه" / "عايز اخر اخبار البورصه"
+  [/^(?:(?:عايز|عاوز|محتاج)\s+(?:اعرف\s+)?)?(?:ايه\s+)?(?:اخر\s+)?((?:اخبار|الاخبار|تطورات)\s+.{3,})$/, "news"],
 ];
 function researchIntent(text){
   const s = arNorm(clean(text)).replace(/[؟?]/g, "").trim();
