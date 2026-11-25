@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>نسيم — لوحة المالك</title>
+<style>
+:root{--bg:#F3F6F7;--card:#fff;--ink:#0E2733;--muted:#5B7280;--line:#DCE5E8;--brand:#1F7A8C;--soft:#E3F1F4;--bad:#C0473D}
+@media (prefers-color-scheme: dark){:root{--bg:#0C1B22;--card:#12262F;--ink:#E3EEF1;--muted:#8FA6B0;--line:rgba(227,238,241,.12);--soft:#163540}}
+*{box-sizing:border-box}
+body{margin:0;font-family:Tahoma,"Segoe UI",Arial,sans-serif;background:var(--bg);color:var(--ink);padding:calc(16px + env(safe-area-inset-top,0px)) 14px 40px}
+main{max-width:860px;margin:0 auto}
+h1{font-size:26px;margin:0 0 4px}h2{font-size:18px;margin:22px 0 10px}
+.sub{color:var(--muted);font-size:13px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:12px 14px;margin:8px 0}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.grow{flex:1;min-width:0}
+input{font:inherit;padding:9px 11px;border:1px solid var(--line);border-radius:10px;background:var(--card);color:var(--ink)}
+button{font:inherit;border:0;border-radius:10px;padding:9px 14px;cursor:pointer;background:var(--soft);color:var(--ink)}
+button.primary{background:var(--brand);color:#fff}button.bad{background:var(--bad);color:#fff}
+.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+.stat{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:10px;text-align:center}
+.stat b{display:block;font-size:24px;color:var(--brand)}.stat span{font-size:12px;color:var(--muted)}
+.tag{display:inline-block;font-size:12px;padding:2px 8px;border-radius:999px;background:var(--soft)}
+.tag.off{background:#f6dad7;color:var(--bad)}
+.err{color:var(--bad);font-size:14px}
+.tabs{display:flex;gap:6px;margin-top:12px;flex-wrap:wrap}.tabs button[aria-pressed=true]{background:var(--brand);color:#fff}
+.sub{overflow-wrap:anywhere}
+@media (max-width:520px){.stats{grid-template-columns:repeat(2,1fr)}
+  .card > .row > .grow{flex-basis:100%}            /* details on their own line, buttons below */
+  .card > .row > input{flex:1}}
+</style>
+</head>
+<body>
+<main>
+  <h1>🌬️ نسيم — لوحة المالك</h1>
+  <div class="sub">إنت بس اللي تقدر توافق أو توقف. كلام المستخدمين ما بيظهرش هنا، لأن ذاكرتهم على موبايلاتهم.</div>
+  <section id="login" class="card" hidden>
+    <h2 style="margin-top:0">دخول المالك</h2>
+    <div class="row"><input id="email" type="email" placeholder="الإيميل" class="grow" dir="ltr"><input id="pass" type="password" placeholder="كلمة السر" class="grow" dir="ltr"><button class="primary" id="go">دخول</button></div>
+    <div id="loginErr" class="err"></div>
+  </section>
+  <section id="app" hidden>
+    <div class="stats" id="stats"></div>
+    <div class="tabs"><button data-t="pending" aria-pressed="true">الطلبات</button><button data-t="users" aria-pressed="false">المستخدمين</button><button data-t="history" aria-pressed="false">المرفوضة</button>
+      <span class="grow"></span><button id="refresh">تحديث</button><button id="logout">خروج</button></div>
+    <div id="list"></div>
+  </section>
+</main>
+<script>
+"use strict";
+const $ = s => document.querySelector(s);
+const esc = t => String(t ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+let token = sessionStorage.getItem("nasem-admin") || "", tab = "pending";
+const fmt = iso => new Intl.DateTimeFormat("ar-EG", {day:"numeric", month:"short", hour:"numeric", minute:"2-digit"}).format(new Date(iso));
+
+async function api(path, opts = {}){
+  const r = await fetch(path, {...opts, headers:{"content-type":"application/json", authorization:"Bearer " + token, ...(opts.headers || {})}});
+  if (r.status === 401){ token = ""; sessionStorage.removeItem("nasem-admin"); show(); throw new Error("login"); }
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error((d.error && d.error.message) || ("خطأ " + r.status));
+  return d;
+}
+function show(){ $("#login").hidden = !!token; $("#app").hidden = !token; if (token) load(); }
+$("#go").onclick = async () => {
+  $("#loginErr").textContent = "";
+  const r = await fetch("/v1/auth/login", {method:"POST", headers:{"content-type":"application/json"}, body: JSON.stringify({email: $("#email").value.trim(), password: $("#pass").value})});
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok){ $("#loginErr").textContent = "الإيميل أو كلمة السر غلط."; return; }
+  token = d.access_token; sessionStorage.setItem("nasem-admin", token);
+  try{ await api("/v1/admin/stats"); show(); }catch(e){ token = ""; sessionStorage.removeItem("nasem-admin"); $("#loginErr").textContent = "الحساب ده مش حساب المالك."; show(); }
+};
+$("#logout").onclick = () => { token = ""; sessionStorage.removeItem("nasem-admin"); show(); };
+$("#refresh").onclick = () => load();
+document.querySelectorAll(".tabs [data-t]").forEach(b => b.onclick = () => { tab = b.dataset.t; document.querySelectorAll(".tabs [data-t]").forEach(x => x.setAttribute("aria-pressed", String(x === b))); load(); });
+
+async function load(){
+  try{
+    const s = await api("/v1/admin/stats");
+    $("#stats").innerHTML = [["pending","طلبات مستنية"],["users","مستخدمين"],["active_devices","أجهزة شغالة"],["requests_today","طلبات ذكاء النهاردة"]]
+      .map(([k, l]) => `<div class="stat"><b>${s[k]}</b><span>${l}</span></div>`).join("");
+    if (tab === "users") return renderUsers(await api("/v1/admin/users"));
+    renderRequests(await api("/v1/admin/requests?status=" + (tab === "history" ? "rejected" : "pending")));
+  }catch(e){ if (e.message !== "login") $("#list").innerHTML = `<div class="card err">${esc(e.message)}</div>`; }
+}
+function renderRequests(rows){
+  if (!rows.length){ $("#list").innerHTML = `<div class="card sub">${tab === "history" ? "مفيش طلبات مرفوضة." : "مفيش طلبات جديدة."}</div>`; return; }
+  $("#list").innerHTML = rows.map(r => `<div class="card"><div class="row"><div class="grow"><b>${esc(r.name)}</b> <span class="sub" dir="ltr">${esc(r.phone)}</span>
+    ${r.email ? `<div class="sub" dir="ltr">${esc(r.email)}</div>` : ""}
+    ${r.purpose ? `<div class="sub">💬 ${esc(r.purpose)}</div>` : ""}
+    <div class="sub">${esc(r.device)} • جهاز …${esc(r.device_id)} • ${fmt(r.at)}</div></div>
+    ${tab === "pending" ? `<input type="number" min="1" placeholder="حد يومي" style="width:110px" id="lim-${r.id}">
+    <button class="primary" data-ok="${r.id}">موافقة</button><button class="bad" data-no="${r.id}">رفض</button>` : `<span class="tag off">مرفوض</span>`}</div></div>`).join("");
+  document.querySelectorAll("[data-ok]").forEach(b => b.onclick = async () => {
+    const v = parseInt(document.getElementById("lim-" + b.dataset.ok).value, 10);
+    try{ await api(`/v1/admin/requests/${b.dataset.ok}/approve`, {method:"POST", body: JSON.stringify(v ? {daily_limit: v} : {})}); load(); }catch(e){ alert(e.message); }
+  });
+  document.querySelectorAll("[data-no]").forEach(b => b.onclick = async () => {
+    const note = prompt("سبب الرفض (اختياري، هيوصل للمستخدم):") || null;
+    try{ await api(`/v1/admin/requests/${b.dataset.no}/reject`, {method:"POST", body: JSON.stringify({note})}); load(); }catch(e){ alert(e.message); }
+  });
+}
+function renderUsers(users){
+  if (!users.length){ $("#list").innerHTML = `<div class="card sub">لسه مفيش مستخدمين.</div>`; return; }
+  $("#list").innerHTML = users.map(u => `<div class="card">
+    <div class="row"><div class="grow"><b>${esc(u.name || "—")}</b> <span class="sub" dir="ltr">${esc(u.phone || "")}</span>
+      ${u.active ? `<span class="tag">شغال</span>` : `<span class="tag off">متوقف</span>`}
+      <div class="sub">النهاردة: ${u.used_today} طلب • الحد: ${u.daily_limit || "الافتراضي"}</div></div>
+      <input type="number" min="1" placeholder="حد يومي" style="width:110px" id="ul-${u.id}">
+      <button data-lim="${u.id}">حفظ الحد</button>
+      ${u.active ? `<button class="bad" data-stop="${u.id}">إيقاف</button>` : `<button class="primary" data-start="${u.id}">تشغيل</button>`}</div>
+    ${u.devices.map(d => `<div class="row sub" style="margin-top:6px"><span class="grow">📱 ${esc(d.label)} • من ${fmt(d.since)}</span>
+      ${d.status === "active" ? `<button data-rev="${d.id}">إلغاء الجهاز</button>` : `<span class="tag off">ملغي</span>`}</div>`).join("")}
+  </div>`).join("");
+  const act = (sel, fn) => document.querySelectorAll(sel).forEach(b => b.onclick = async () => { try{ const r = await fn(b); if (r !== false) load(); }catch(e){ alert(e.message); } });
+  act("[data-stop]", b => confirm("توقف المستخدم ده؟ كل أجهزته هتقف فوراً.") ? api(`/v1/admin/users/${b.dataset.stop}`, {method:"PATCH", body: JSON.stringify({active:false})}) : false);
+  act("[data-start]", b => api(`/v1/admin/users/${b.dataset.start}`, {method:"PATCH", body: JSON.stringify({active:true})}));
+  act("[data-lim]", b => { const v = parseInt(document.getElementById("ul-" + b.dataset.lim).value, 10);
+    return api(`/v1/admin/users/${b.dataset.lim}`, {method:"PATCH", body: JSON.stringify(v ? {daily_limit: v} : {clear_limit: true})}); });
+  act("[data-rev]", b => confirm("تلغي الجهاز ده؟ هيحتاج يطلب تفعيل من جديد.") ? api(`/v1/admin/devices/${b.dataset.rev}/revoke`, {method:"POST"}) : false);
+}
+show();
+</script>
+</body>
+</html>

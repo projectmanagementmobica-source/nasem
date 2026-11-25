@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="ar" dir="rtl"><head><meta charset="utf-8"><title>{{ g.title }}</title><style>{{ css|safe }}</style></head>
+<body>
+<header class="doc">
+  <div class="brand">نسيم — دليل عملي</div>
+  <h1>{{ g.title }}</h1>
+  <div class="meta">{{ generated_label }}{% if g.grounded %} — بناءً على بحث على النت ({{ g.search_count }} عملية بحث){% else %} — من غير بحث على النت{% endif %}</div>
+</header>
+
+<div class="box"><p style="margin:0;font-size:12pt">{{ g.summary }}</p></div>
+
+{% if g.best or g.easiest %}
+<div class="pick">
+  {% if g.best %}<div><b>الأفضل</b>{{ g.best.option }}{% if g.best.why %}<div class="muted">{{ g.best.why }}</div>{% endif %}</div>{% endif %}
+  {% if g.easiest %}<div><b>الأسهل</b>{{ g.easiest.option }}{% if g.easiest.why %}<div class="muted">{{ g.easiest.why }}</div>{% endif %}</div>{% endif %}
+</div>
+{% endif %}
+
+{% if g.steps %}<section><h2>إزاي</h2><ol class="steps">{% for s in g.steps %}<li>{{ s }}</li>{% endfor %}</ol></section>{% endif %}
+
+{% if g.where %}<section><h2>فين</h2><ul>{% for w in g.where %}<li>{{ w.place }}{% if w.note %} <span class="muted">— {{ w.note }}</span>{% endif %}</li>{% endfor %}</ul></section>{% endif %}
+
+{% if g.who %}<section><h2>مين وليه</h2><ul>{% for w in g.who %}<li><b>{{ w.name }}</b>{% if w.why %} <span class="muted">— {{ w.why }}</span>{% endif %}</li>{% endfor %}</ul></section>{% endif %}
+
+{% if g.options %}
+<section><h2>الاختيارات</h2>
+<table><thead><tr><th style="width:22%">الاختيار</th><th>المميزات</th><th>العيوب</th><th style="width:16%">التكلفة</th></tr></thead><tbody>
+{% for o in g.options %}<tr><td>{{ o.name }}</td><td>{{ o.pros or "" }}</td><td>{{ o.cons or "" }}</td><td class="muted">{{ o.cost or "" }}</td></tr>{% endfor %}
+</tbody></table></section>
+{% endif %}
+
+{% if g.tips %}<section><h2>نصايح</h2><ul>{% for t in g.tips %}<li>{{ t }}</li>{% endfor %}</ul></section>{% endif %}
+
+{% if g.draft_message %}<section><h2>رسالة جاهزة{% if g.draft_message.to %} لـ {{ g.draft_message.to }}{% endif %}</h2><div class="draft">{{ g.draft_message.text }}</div></section>{% endif %}
+
+{% if g.check_before %}<div class="warn"><b>اتأكد قبل ما تتحرك:</b> {{ g.check_before }}</div>{% endif %}
+
+{% if g.sources %}
+<section><h2>المصادر</h2><ol class="sources">
+{% for s in g.sources %}<li>{{ s.title or "" }}<br><a class="ltr" href="{{ s.url }}">{{ s.url }}</a></li>{% endfor %}
+</ol></section>
+{% endif %}
+<p class="muted" style="font-size:9pt">توجيه عام وليس استشارة طبية أو قانونية أو مالية. المواعيد والأسعار ممكن تتغير.</p>
+</body></html>

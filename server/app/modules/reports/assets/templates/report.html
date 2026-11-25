@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="ar" dir="rtl"><head><meta charset="utf-8"><title>{{ title }}</title><style>{{ css|safe }}</style></head>
+<body>
+<header class="doc">
+  <div class="brand">نسيم</div>
+  <h1>{{ title }}</h1>
+  <div class="meta">{{ owner }} — من {{ start }} لحد {{ end }}</div>
+</header>
+
+<div class="kpis">
+  <div class="kpi"><b>{{ stats.upcoming }}</b><span>جاية</span></div>
+  <div class="kpi late"><b>{{ stats.overdue }}</b><span>متأخرة</span></div>
+  <div class="kpi"><b>{{ stats.completed }}</b><span>خلصت</span></div>
+  <div class="kpi wait"><b>{{ stats.awaiting_approval }}</b><span>مستنية موافقتك</span></div>
+</div>
+
+{% if summary %}
+<div class="box">
+  <h2>{{ summary.headline }}</h2>
+  {% if summary.highlights %}<ul>{% for h in summary.highlights %}<li>{{ h }}</li>{% endfor %}</ul>{% endif %}
+  {% if summary.next_focus %}<p><b>ركّز على:</b> {{ summary.next_focus }}</p>{% endif %}
+</div>
+{% endif %}
+
+{% if overdue %}
+<section>
+  <h2>متأخرة <small>({{ overdue|length }})</small></h2>
+  <table><thead><tr><th style="width:45%">الالتزام</th><th style="width:25%">كان معادها</th><th>التفاصيل</th></tr></thead><tbody>
+  {% for c in overdue %}<tr><td>{{ c.title }}</td><td class="date late">{{ c.when }}</td><td class="muted">{{ c.details }}</td></tr>{% endfor %}
+  </tbody></table>
+</section>
+{% endif %}
+
+<section>
+  <h2>الجاية <small>({{ upcoming|length }})</small></h2>
+  {% if upcoming %}
+  <table><thead><tr><th style="width:45%">الالتزام</th><th style="width:25%">المعاد</th><th>التفاصيل</th></tr></thead><tbody>
+  {% for c in upcoming %}<tr><td>{{ c.title }}</td><td class="date">{{ c.when }}</td><td class="muted">{{ c.details }}</td></tr>{% endfor %}
+  </tbody></table>
+  {% else %}<p class="empty">مفيش التزامات جاية في الفترة دي.</p>{% endif %}
+</section>
+
+{% if completed %}
+<section>
+  <h2>خلصت <small>({{ completed|length }})</small></h2>
+  <table><thead><tr><th style="width:70%">الالتزام</th><th>اتقفل</th></tr></thead><tbody>
+  {% for c in completed %}<tr><td>{{ c.title }}</td><td class="date">{{ c.when }}</td></tr>{% endfor %}
+  </tbody></table>
+</section>
+{% endif %}
+
+{% if awaiting %}
+<section>
+  <h2>مستنية موافقتك <small>({{ awaiting|length }})</small></h2>
+  <table><thead><tr><th style="width:22%">النوع</th><th>التفاصيل</th><th style="width:25%">اتطلب</th></tr></thead><tbody>
+  {% for a in awaiting %}<tr><td>{{ a.kind }}</td><td>{{ a.details }}</td><td class="date">{{ a.when }}</td></tr>{% endfor %}
+  </tbody></table>
+</section>
+{% endif %}
+
+{% if new_memories %}
+<section>
+  <h2>اللي عرفته عنك الفترة دي <small>({{ new_memories|length }})</small></h2>
+  <table><thead><tr><th style="width:15%">التصنيف</th><th style="width:18%">عن مين</th><th style="width:22%">المعلومة</th><th>القيمة</th></tr></thead><tbody>
+  {% for m in new_memories %}<tr><td class="muted">{{ m.category }}</td><td>{{ m.entity }}</td><td>{{ m.key }}</td><td>{{ m.value }}</td></tr>{% endfor %}
+  </tbody></table>
+</section>
+{% endif %}
+{% if not include_sensitive %}<p class="muted" style="font-size:9pt">المعلومات الصحية والمالية مش متضمنة في التقرير ده.</p>{% endif %}
+</body></html>

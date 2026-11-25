@@ -1,0 +1,7 @@
+{
+  "name": "nasem-app-tests",
+  "private": true,
+  "description": "End-to-end tests for the Nasem app (real browser)",
+  "scripts": { "test": "node app.test.js" },
+  "devDependencies": { "puppeteer": "^23.0.0" }
+}

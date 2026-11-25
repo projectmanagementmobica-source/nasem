@@ -1,0 +1,57 @@
+@font-face { font-family: "Plex Arabic"; font-weight: 400; src: url("{{ fonts }}/IBMPlexSansArabic-Regular.ttf"); }
+@font-face { font-family: "Plex Arabic"; font-weight: 500; src: url("{{ fonts }}/IBMPlexSansArabic-Medium.ttf"); }
+@font-face { font-family: "Plex Arabic"; font-weight: 700; src: url("{{ fonts }}/IBMPlexSansArabic-Bold.ttf"); }
+
+@page {
+  size: A4;
+  margin: 18mm 16mm 20mm 16mm;
+  @bottom-center { content: "صفحة " counter(page) " من " counter(pages); font: 9pt "Plex Arabic"; color: #5B7280; }
+  @bottom-right { content: "نسيم"; font: 500 9pt "Plex Arabic"; color: #1F7A8C; }
+  @bottom-left { content: "{{ generated }}"; font: 9pt "Plex Arabic"; color: #5B7280; }
+}
+* { box-sizing: border-box; }
+html { direction: rtl; }
+body { font-family: "Plex Arabic", sans-serif; color: #0E2733; font-size: 10.5pt; line-height: 1.65; margin: 0; }
+
+header.doc { border-bottom: 2px solid #1F7A8C; padding-bottom: 8pt; margin-bottom: 14pt; }
+header.doc .brand { color: #1F7A8C; font-weight: 700; font-size: 11pt; }
+header.doc h1 { margin: 2pt 0 2pt; font-size: 22pt; line-height: 1.25; font-weight: 700; }
+header.doc .meta { color: #5B7280; font-size: 10pt; }
+
+.kpis { display: flex; gap: 8pt; margin: 0 0 14pt; }
+.kpi { flex: 1; border: 1px solid #C9D6DB; border-radius: 6pt; padding: 8pt 10pt; }
+.kpi b { display: block; font-size: 20pt; line-height: 1.1; font-weight: 700; }
+.kpi span { color: #5B7280; font-size: 9pt; }
+.kpi.late b { color: #B3443A; }
+.kpi.wait b { color: #A86F00; }
+
+.box { background: #EEF4F6; border-radius: 6pt; padding: 10pt 12pt; margin-bottom: 14pt; break-inside: avoid; }
+.box h2 { margin: 0 0 4pt; font-size: 12.5pt; }
+.box ul { margin: 4pt 0; padding-inline-start: 16pt; }
+.box p { margin: 4pt 0 0; }
+.warn { border-inline-start: 3pt solid #A86F00; background: #FBF4E4; padding: 6pt 10pt; border-radius: 4pt; margin: 10pt 0; break-inside: avoid; }
+
+section { margin-bottom: 14pt; }
+section h2 { font-size: 13pt; margin: 0 0 6pt; padding-bottom: 3pt; border-bottom: 1px solid #C9D6DB; break-after: avoid; }
+section h2 small { color: #5B7280; font-weight: 400; font-size: 10pt; }
+.empty { color: #5B7280; font-size: 10pt; }
+
+table { width: 100%; border-collapse: collapse; }
+thead { display: table-header-group; }
+th { background: #1F7A8C; color: #fff; font-weight: 500; text-align: right; padding: 5pt 7pt; font-size: 9.5pt; }
+td { padding: 5pt 7pt; border-bottom: 1px solid #DDE6E9; vertical-align: top; }
+tr { break-inside: avoid; }
+tbody tr:nth-child(even) td { background: #F6F9FA; }
+td.date { white-space: nowrap; color: #33505C; font-size: 9.5pt; }
+td.late { color: #B3443A; font-weight: 500; }
+.muted { color: #5B7280; }
+.ltr { direction: ltr; unicode-bidi: embed; }
+
+ol.steps { margin: 0; padding-inline-start: 18pt; }
+ol.steps li { margin-bottom: 3pt; }
+.pick { display: flex; gap: 10pt; margin-bottom: 14pt; }
+.pick > div { flex: 1; border: 1px solid #C9D6DB; border-radius: 6pt; padding: 8pt 10pt; break-inside: avoid; }
+.pick b { color: #1F7A8C; display: block; font-size: 9.5pt; }
+.draft { white-space: pre-wrap; border: 1px dashed #1F7A8C; border-radius: 6pt; padding: 8pt 10pt; }
+.sources li { margin-bottom: 3pt; }
+.sources a { color: #1F7A8C; text-decoration: none; word-break: break-all; font-size: 9pt; }

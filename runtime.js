@@ -97,6 +97,27 @@
   const JSON_ONLY = "\n\nReply with ONLY the JSON object, nothing before or after it.";
 
   // ---------------------------------------------------------------- providers
+
+  // ---------------------------------------------------------------- verified web sources
+  // Links come from the search tool's own results, never from the model's text.
+  function addSrc(out, url, title, age, cited) {
+    if (typeof url !== "string" || !/^https?:\/\//.test(url)) return;
+    const f = out.find((x) => x.url === url); if (f) { f.cited = f.cited || !!cited; return; }
+    out.push({ url, title: String(title || "").slice(0, 200), age: age ? String(age).slice(0, 40) : null, cited: !!cited });
+  }
+  function anthropicSources(blocks) {
+    const out = [];
+    for (const b of blocks) if (b.type === "text") for (const c of b.citations || []) addSrc(out, c.url, c.title, null, true);
+    for (const b of blocks) if (b.type === "web_search_tool_result" && Array.isArray(b.content)) for (const r of b.content) if (r && r.type === "web_search_result") addSrc(out, r.url, r.title, r.page_age);
+    return out.sort((a, b) => b.cited - a.cited).slice(0, 12);
+  }
+  function geminiSources(cand) {
+    const gm = (cand && cand.groundingMetadata) || {}, out = [], used = new Set();
+    for (const sup of gm.groundingSupports || []) for (const i of sup.groundingChunkIndices || []) used.add(i);
+    (gm.groundingChunks || []).forEach((ch, i) => { const w = ch.web || {}; addSrc(out, w.uri, w.title || w.domain, null, used.has(i)); });
+    return [out.sort((a, b) => b.cited - a.cited).slice(0, 12), (gm.webSearchQueries || []).slice(0, 6).map(String)];
+  }
+
   async function callAnthropic(cfg, model, prompt, { images, signal, webSearch }) {
     const content = [];
     for (const im of images || []) content.push({ type: "image", source: { type: "base64", media_type: "image/jpeg", data: await blobToB64(await downscale(im)) } });
@@ -104,6 +125,7 @@
     const messages = [{ role: "user", content }];
     const body = { model, max_tokens: 4096, messages };
     if (webSearch) body.tools = [{ type: "web_search_20250305", name: "web_search", max_uses: 5 }];
+    const seen = [];
     for (let round = 0; round < 4; round++) {
       const res = await fetch("https://api.anthropic.com/v1/messages", {
         method: "POST", signal,
@@ -117,10 +139,14 @@
       });
       if (!res.ok) throw await httpErr(res);
       const data = await res.json();
+      seen.push(...(data.content || []));
       if (data.stop_reason === "pause_turn") { messages.push({ role: "assistant", content: data.content }); continue; }
       const texts = (data.content || []).filter((b) => b.type === "text").map((b) => b.text);
-      for (let i = texts.length - 1; i >= 0; i--) if (texts[i].includes("{")) return parseJSONText(texts.slice(i).join("\n"));
-      return parseJSONText(texts.join("\n"));
+      let out = null;
+      for (let i = texts.length - 1; i >= 0; i--) if (texts[i].includes("{")) { out = parseJSONText(texts.slice(i).join("\n")); break; }
+      if (!out) out = parseJSONText(texts.join("\n"));
+      if (webSearch && out && typeof out === "object") out._sources = anthropicSources(seen);
+      return out;
     }
     throw err("invalid_json", "search did not finish");
   }
@@ -153,7 +179,9 @@
     if (!res.ok) throw await httpErr(res);
     const d = await res.json();
     const cand = d.candidates && d.candidates[0];
-    return parseJSONText(((cand && cand.content && cand.content.parts) || []).map((p) => p.text || "").join(""));
+    const out = parseJSONText(((cand && cand.content && cand.content.parts) || []).map((p) => p.text || "").join(""));
+    if (webSearch && out && typeof out === "object") [out._sources, out._queries] = geminiSources(cand);
+    return out;
   }
 
   // Groq: free tier, no card, OpenAI-compatible. Text only (no images / audio here).
@@ -200,6 +228,32 @@
     if (res.status === 401) throw err("login_required");
     return res;
   }
+  async function gwReq(method, path, body) {
+    const send = () => { const g = getGW(); return fetch(base(g.url) + path, { method, headers: { "content-type": "application/json", authorization: "Bearer " + g.access }, body: body === undefined ? undefined : JSON.stringify(body) }); };
+    const g = getGW(); if (!g.url || !g.access) throw err("login_required");
+    let res = await send();
+    if (res.status === 401 && await gwRefresh()) res = await send();
+    if (res.status === 401) throw err("login_required");
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok) throw err((d.error && d.error.code) || "upstream_error", (d.error && d.error.message) || String(res.status));
+    return d;
+  }
+  // نسيم العيلة: only what the parent chose to share ever reaches the server.
+  const family = {
+    available: () => getConfig().mode === "gateway" && !!getGW().access,
+    links: () => gwReq("GET", "/v1/family"),
+    invite: (name, shares) => gwReq("POST", "/v1/family/invite", { name, shares }),
+    join: (code, label, name) => gwReq("POST", "/v1/family/join", { code, label, name }),
+    setShares: (id, shares) => gwReq("PUT", `/v1/family/links/${id}/shares`, shares),
+    revoke: (id) => gwReq("DELETE", `/v1/family/links/${id}`),
+    sync: (doses, appts) => gwReq("PUT", "/v1/family/sync", { doses, appts }),
+    taken: (client_id, taken) => gwReq("POST", "/v1/family/taken", { client_id, taken }),
+    emergency: () => gwReq("POST", "/v1/family/emergency"),
+    feed: () => gwReq("GET", "/v1/family/feed"),
+    propose: (link_id, title, due, note) => gwReq("POST", "/v1/family/requests", { link_id, title, due, note }),
+    incoming: () => gwReq("GET", "/v1/family/requests/incoming"),
+    decide: (id, accept) => gwReq("POST", `/v1/family/requests/${id}/decide`, { accept }),
+  };
   async function gwLogin(url, email, password) {
     const r = await fetch(base(url) + "/v1/auth/login", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email, password }) });
     if (r.status === 401) throw err("bad_login");
@@ -223,10 +277,11 @@
     server: () => managedServer() || base(getGW().url),
     pending() { try { return JSON.parse(localStorage.getItem(ACT_KEY) || "null"); } catch (e) { return null; } },
     deviceCode: () => deviceId().slice(-6),
-    async request(name, phone) {
+    async request(name, phone, extra = {}) {
       const srv = this.server(); if (!srv) throw err("no_server");
       const res = await fetch(srv + "/v1/access/request", { method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ name: String(name).trim(), phone: String(phone).trim(), device_id: deviceId(), device_label: deviceLabel() }) });
+        body: JSON.stringify({ name: String(name).trim(), phone: String(phone).trim(), device_id: deviceId(), device_label: deviceLabel(),
+          email: (extra.email || "").trim() || null, purpose: (extra.purpose || "").trim() || null, accepted_terms: !!extra.acceptedTerms }) });
       const d = await res.json().catch(() => ({}));
       if (!res.ok) throw err((d.error && d.error.code) || "upstream_error", (d.error && d.error.message) || String(res.status));
       localStorage.setItem(ACT_KEY, JSON.stringify({ id: d.request_id, secret: d.claim_secret, at: Date.now(), name, phone }));
@@ -497,8 +552,56 @@
     },
   };
 
+
+  // ---------------------------------------------------------------- encrypted backup
+  // The passphrase never leaves the phone. A key is derived from it (PBKDF2-SHA256, 310k rounds),
+  // kept non-extractable in IndexedDB for automatic backups, and only ciphertext is uploaded.
+  const BK_ITER = 310000;
+  const u8b64 = (u8) => { let s = ""; const a = new Uint8Array(u8); for (let i = 0; i < a.length; i += 0x8000) s += String.fromCharCode.apply(null, a.subarray(i, i + 0x8000)); return btoa(s); };
+  const b64u8 = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
+  async function deriveBackupKey(pass, salt, iter) {
+    const base = await crypto.subtle.importKey("raw", new TextEncoder().encode(pass.normalize("NFC")), "PBKDF2", false, ["deriveKey"]);
+    return crypto.subtle.deriveKey({ name: "PBKDF2", hash: "SHA-256", salt, iterations: iter }, base, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
+  }
+  async function squeeze(bytes, dir) {
+    if (typeof CompressionStream === "undefined") return null;
+    const st = new Blob([bytes]).stream().pipeThrough(dir === "in" ? new CompressionStream("gzip") : new DecompressionStream("gzip"));
+    return new Uint8Array(await new Response(st).arrayBuffer());
+  }
+  async function sealWith(key, saltB64, obj) {
+    const raw = new TextEncoder().encode(JSON.stringify(obj));
+    const z = await squeeze(raw, "in"), iv = crypto.getRandomValues(new Uint8Array(12));
+    const ct = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, z || raw);
+    return JSON.stringify({ v: 1, alg: "AES-GCM", kdf: "PBKDF2-SHA256", iter: BK_ITER, salt: saltB64, iv: u8b64(iv), ct: u8b64(ct), z: z ? 1 : 0, at: new Date().toISOString() });
+  }
+  const backup = {
+    isEnvelope(text) { try { const e = JSON.parse(text); return !!(e && e.v === 1 && e.alg === "AES-GCM" && e.ct); } catch (e) { return false; } },
+    async hasKey() { return !!(await kvGet("bkey")); },
+    async setup(pass) {
+      const salt = crypto.getRandomValues(new Uint8Array(16)), saltB64 = u8b64(salt);
+      await kvSet("bkey", await deriveBackupKey(pass, salt, BK_ITER)); await kvSet("bsalt", saltB64);
+    },
+    async forget() { await kvDel("bkey"); await kvDel("bsalt"); },
+    async seal(obj) { const key = await kvGet("bkey"), salt = await kvGet("bsalt"); if (!key || !salt) throw err("no_backup_key"); return sealWith(key, salt, obj); },
+    async sealWithPass(obj, pass) { const salt = crypto.getRandomValues(new Uint8Array(16)); return sealWith(await deriveBackupKey(pass, salt, BK_ITER), u8b64(salt), obj); },
+    async open(text, pass) {
+      const e = JSON.parse(text);
+      const key = await deriveBackupKey(pass, b64u8(e.salt), e.iter);
+      let pt;
+      try { pt = new Uint8Array(await crypto.subtle.decrypt({ name: "AES-GCM", iv: b64u8(e.iv) }, key, b64u8(e.ct))); }
+      catch (x) { throw err("wrong_passphrase"); }
+      if (e.z) pt = await squeeze(pt, "out");
+      return JSON.parse(new TextDecoder().decode(pt));
+    },
+    available: () => getConfig().mode === "gateway" && !!getGW().access,
+    meta: () => gwReq("GET", "/v1/backup/meta"),
+    upload: (blob, device_label) => gwReq("PUT", "/v1/backup", { blob, device_label }),
+    download: (previous) => gwReq("GET", "/v1/backup" + (previous ? "?previous=true" : "")),
+    remove: () => gwReq("DELETE", "/v1/backup"),
+  };
+
   // Crypto-shredding: drop the device key -> anything encrypted with it is unreadable forever.
-  async function shredAll() { await kvDel("doc:data/users/local/state"); await kvDel("key"); }
+  async function shredAll() { await kvDel("doc:data/users/local/state"); await kvDel("key"); await kvDel("bkey"); await kvDel("bsalt"); }
 
   const user = { id: async () => "local" };
 
@@ -733,7 +836,7 @@
   }
 
   window.claude = { use: async (name) => ({ sample, db, user, downloads })[name] || null };
-  window.NASEM_APP = { getConfig, setConfig, test, shredAll, state, PROVIDER_NAMES, tts, gateway: { get: getGW, login: gwLogin, logout: gwLogout }, activation, ready, managed: () => !!managedServer(), canAudio, canImage, image, takeShared, push, usage, exhausted };
+  window.NASEM_APP = { getConfig, setConfig, test, shredAll, state, PROVIDER_NAMES, tts, gateway: { get: getGW, login: gwLogin, logout: gwLogout }, activation, ready, managed: () => !!managedServer(), canAudio, canImage, image, takeShared, push, usage, exhausted, family, backup };
 
   if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
     window.addEventListener("load", () => navigator.serviceWorker.register("./sw.js").catch(() => {}));

@@ -1,6 +1,6 @@
 /* Offline shell. The app itself is network-first so updates arrive on the next open;
    fonts and the file-reading libraries are cached after first use. AI calls are never cached. */
-const CACHE = "nasem-v32";
+const CACHE = "nasem-v46";
 const SHELL = ["./", "./index.html", "./runtime.js", "./config.json", "./manifest.webmanifest", "./icon-192.png", "./icon-512.png"];
 
 self.addEventListener("install", (e) => {
@@ -62,6 +62,7 @@ self.addEventListener("push", (e) => {
     let title = "نسيم", body = "عندك تذكير", tag;
     try {
       const d = e.data.json(); tag = d.id;
+      if (d.p){ title = d.p.t || title; body = d.p.b || ""; throw "plain"; }   // family alerts: generic text, no decryption needed
       const key = await deviceKey();
       if (key) {
         const pt = await crypto.subtle.decrypt({ name: "AES-GCM", iv: fromB64(d.iv) }, key, fromB64(d.c));
