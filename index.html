@@ -2650,9 +2650,11 @@ function cloudVoiceSettings(){
 
 /* ---------------- identity: "تعرّف على نسيم" ---------------- */
 const APP = {
-  name: "نسيم", nameLatin: "NASEM AI", version: "إصدار 5.1 (تطبيق)",
+  name: "نسيم", nameLatin: "NASEM AI", version: "إصدار 5.2 (تطبيق)",
   updated: "2026-11-25",
   changes: [
+    "⚡ الذكاء بقى يستخدم Gemini 3.6 Flash المتاح مجاناً على حسابك على طول",
+    "📐 المقايسة بتفهم \"100م\" و\"10 في 10\"",
     "🛟 لو بحث جوجل المجاني خلص، نسيم بيكمّل بمعرفة الذكاء ويقولك بوضوح إن مفيش مصادر حديثة",
     "📊 دراسات الجدوى، واقترح عليّ مشروع حسب رأس مالك والسوق",
     "🧊 مجسم 3D للبيت بعد التشطيب: لف حواليه، ادخل جواه، افرش وغيّر الألوان",
@@ -4795,10 +4797,10 @@ function buildQuantities(inp){
 function parseBuild(text){
   const s = clean(text), n = arNorm(s);
   if (!/(بناء|ابني|ابنى|هبني|نبني|انشاء|تشييد|اعمل بيت|عماره|منزل|بيت|فيلا|شاليه|مبني)/.test(n)) return null;
-  if (!/(متر|م2|م٢|مترمربع)/.test(n) && !/\d+\s*[x×*]\s*\d+/.test(s)) return null;
+  if (!/(متر|م2|م٢|مترمربع|\d\s*م\b|\d\s*م(?=\s|$))/.test(n) && !/\d+\s*(?:[x×*]|في)\s*\d+/.test(n)) return null;
   if (/(سعر المتر|ايجار|للبيع|اشتري|شقه للايجار)/.test(n)) return null;
-  const dims = s.match(/(\d+(?:\.\d+)?)\s*[x×*]\s*(\d+(?:\.\d+)?)/);
-  const am = n.match(/(\d+(?:\.\d+)?)\s*(?:متر|م2|م٢)/);
+  const dims = n.match(/(\d+(?:\.\d+)?)\s*(?:[x×*]|في)\s*(\d+(?:\.\d+)?)/);
+  const am = n.match(/(\d+(?:\.\d+)?)\s*(?:متر|م2|م٢|م(?=\s|$))/);
   let footprint = am ? +am[1] : dims ? +dims[1] * +dims[2] : 0;
   if (!(footprint >= 30 && footprint <= 5000)) return null;
   let floors = 1;
