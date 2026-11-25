@@ -22,6 +22,7 @@ from app.modules.internal.router import router as internal_router
 from app.modules.access.service import ensure_admin
 from app.modules.push.service import push_loop
 from app.db.session import SessionLocal
+from sqlalchemy.exc import IntegrityError
 from app.modules.reports.router import router as reports_router
 from app.modules.orchestrator.router import router as orchestrator_router
 from app.shared.api import register_exception_handlers
@@ -41,6 +42,8 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     try:
         async with SessionLocal() as s:
             await ensure_admin(s)
+    except IntegrityError:
+        log.info("admin already created by a parallel instance")
     except Exception:
         log.exception("admin bootstrap failed")
     if settings.serverless:
