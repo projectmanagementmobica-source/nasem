@@ -516,6 +516,7 @@ function repairState(){
   S.crafts = arr(S.crafts).filter(c => c && c.name).map(c => ({...c, id: c.id || uid(), name: str(c.name), trade: str(c.trade) || "تاني", jobs: arr(c.jobs).filter(j => j && j.at).map(j => ({...j, what: str(j.what) || "شغلانة"}))}));
   S.spend = arr(S.spend).filter(e => e && e.at && Number.isFinite(+e.amount)).map(e => ({...e, amount: +e.amount}));
   S.projects = arr(S.projects).filter(x => x && typeof x === "object").map(x => ({...x, items: arr(x.items)}));
+  S.studies = arr(S.studies).filter(x => x && typeof x === "object" && x.id).map(x => x.state === "loading" ? {...x, state: x.data ? "ready" : "failed"} : x);
   S.memories = arr(S.memories).filter(m => m && typeof m === "object");
   S.reports = arr(S.reports).filter(r => r && r.report && typeof r.report === "object" && r.id).map(r => ({...r, sources: arr(r.sources), report: {...r.report, key_numbers: arr(r.report.key_numbers), sections: arr(r.report.sections), what_to_do: arr(r.report.what_to_do), watch_out: arr(r.report.watch_out), follow_ups: arr(r.report.follow_ups), sources: arr(r.report.sources), bottom_line: String(r.report.bottom_line || ""), title: String(r.report.title || "")}}));
   S.commitments = arr(S.commitments).filter(c => c && typeof c === "object");
@@ -1348,7 +1349,7 @@ async function send(text, source = "text"){
   if (text.length > MAX_INPUT){ toast("الرسالة أطول من 4000 حرف."); return; }
   // Simple things are answered on the phone itself: instant, private, offline, and they don't spend the AI quota.
   if (!EMERGENCY_RE.test(text)){
-    const lr = localHelp(text) || localSearch(text) || localBuild(text) || localBooks(text) || localSpend(text) || localAnswer(text) || marketAlertLocal(text) || (isMarketText(text) ? await marketAnswer(text) : null);
+    const lr = localHelp(text) || localSearch(text) || localBuild(text) || localFeas(text) || localBooks(text) || localSpend(text) || localAnswer(text) || marketAlertLocal(text) || (isMarketText(text) ? await marketAnswer(text) : null);
     const local = lr && typeof lr === "object" ? lr.text : lr;
     if (local){
       S.messages.push({id:uid(), role:"user", text, at:nowISO(), source}); noteMessage(text, source);
@@ -1607,6 +1608,8 @@ function renderChat(){
       : l.url === "#say" ? h("button",{class:"fb", onclick:openSayAll}, l.label)
       : /^#research:/.test(l.url) ? h("button",{class:"fb", onclick:() => startResearch(l.url.slice(10))}, l.label)
       : /^#build:/.test(l.url) ? h("button",{class:"fb", onclick:() => openBuild(l.url.slice(7))}, l.label)
+      : l.url === "#feas:suggest" ? h("button",{class:"fb", onclick:() => openFeasHome("suggest")}, l.label)
+      : /^#feas:/.test(l.url) ? h("button",{class:"fb", onclick:() => openFeas(l.url.slice(6))}, l.label)
       : h("a",{class:"fb", href:l.url, target: /^tel:/.test(l.url) ? null : "_blank", rel:"noopener"}, l.label))));
     if (m.privacy && (m.privacy.hidden || m.privacy.audio || m.privacy.image)){
       const box = h("div",{class:"sent", hidden:true}, h("div",{class:"sent-label"}, "اللي وصل لخدمة الذكاء من رسالتك:"), h("div",{}, m.privacy.sent));
@@ -4956,6 +4959,260 @@ function openBuild(id){
   if (!p.updatedAt && !p.autoPriced){ p.autoPriced = true; setTimeout(() => buildPrices(p, null), 300); }
 }
 
+/* ================= دراسات الجدوى + اقترح مشروع: السوق من النت بمصادر، والحسابات المالية على الموبايل ================= */
+/* The AI researches and proposes ASSUMPTIONS (prices, volumes, costs, market evidence). Every financial figure — profit,
+   break-even, payback, NPV, IRR — is computed here, so changing one assumption recalculates the whole study. */
+const FEAS_RATE = 0.25;   // discount rate for NPV in Egypt (close to bank CD rates + risk); editable per study
+function feasParseMoney(t){
+  const n = arNorm(normNums(String(t || ""))), m = n.match(/(\d+(?:\.\d+)?)\s*(مليون|الف|ألف|k)?/i);
+  if (!m) return null; const v = +m[1] * (/مليون/.test(m[2] || "") ? 1e6 : /الف|ألف|k/i.test(m[2] || "") ? 1e3 : 1); return v >= 1000 ? v : null;
+}
+const FEAS_CITY_RE = /\s*في\s+(القاهره|الجيزه|اسكندريه|الاسكندريه|المنصوره|طنطا|الزقازيق|اسيوط|سوهاج|المنيا|بني سويف|الفيوم|دمياط|بورسعيد|الاسماعيليه|السويس|الغردقه|شرم الشيخ|الاقصر|اسوان|بنها|شبين الكوم|دمنهور|كفر الشيخ|6 اكتوبر|اكتوبر|الشيخ زايد|التجمع|العاشر من رمضان|مدينه نصر|المعادي|حلوان|العبور|الشروق)/;
+function parseFeas(text){
+  const s = clean(text), n = arNorm(s);
+  let m;
+  const city = (n.match(FEAS_CITY_RE) || [])[1] || "";
+  if ((m = n.match(/دراس[هة]\s+(?:ال)?جدوي\s*(?:ل|عن|لمشروع|مشروع|ل مشروع)?\s*(.*)$/))){
+    const idea = m[1].replace(/^(مشروع|ل)\s+/, "").replace(/\s+(?:ب|بـ)?\s*(?:راس|رأس)\s*مال.*$/, "").replace(/\s+ب\s*\d.*$/, "").replace(FEAS_CITY_RE, "").trim();
+    return {op: "study", idea, capital: feasParseMoney(s), city};
+  }
+  if (/(اقترح|اقترحلي|رشح|رشحلي|ابحثلي عن|دورلي علي|فكره).{0,20}(مشروع|بيزنس)/.test(n) || /(عايز|عاوز|محتاج|نفسي)\s+(افتح|اعمل|ابدا|ابتدي|ادخل في)\s+(مشروع|بيزنس)/.test(n))
+    return {op: "suggest", capital: feasParseMoney(s), city};
+  return null;
+}
+function localFeas(text){
+  const x = parseFeas(text); if (!x) return null;
+  if (x.op === "study"){
+    if (!x.idea || x.idea.length < 3){ setTimeout(() => openFeasHome("study"), 50); return "تمام. قولي فكرة المشروع ورأس المال والمكان، وأنا أعمل الدراسة."; }
+    const st = feasNew({idea: x.idea, capital: x.capital, city: x.city}); setTimeout(() => { openFeas(st.id); feasRun(st); }, 50);
+    return {text: `ببدأ دراسة جدوى "${x.idea}": بدرس السوق والمنافسين والأسعار من النت، وبعدين أحسب التكاليف والأرباح ونقطة التعادل واسترداد رأس المال.`, links: [{label: "📊 افتح الدراسة", url: "#feas:" + st.id}]};
+  }
+  setTimeout(() => openFeasHome("suggest", x), 50);
+  return {text: "تمام، هسألك كام سؤال صغيرين (رأس المال، المكان، خبرتك ووقتك) وبعدين أدرس السوق وأقترح عليك أنسب مشاريع بمعايير نجاحها.", links: [{label: "💡 اقترح مشروع", url: "#feas:suggest"}]};
+}
+function feasNew(inp){
+  const st = {id: uid(), idea: inp.idea, capital: inp.capital || null, city: inp.city || "", notes: inp.notes || "", at: nowISO(), state: "new", data: null, rate: FEAS_RATE};
+  S.studies = S.studies || []; S.studies.unshift(st); store.save(); return st;
+}
+/* ---------- the money model ---------- */
+function feasModel(st){
+  const d = st.data; if (!d) return null;
+  const capex = (d.capex || []).reduce((a, x) => a + (+x.cost || 0), 0);
+  const fixed = (d.opex || []).reduce((a, x) => a + (+x.cost || 0), 0) + (d.staff || []).reduce((a, x) => a + (+x.salary || 0) * (+x.count || 1), 0);
+  const P = d.products || [], rev0 = P.reduce((a, p) => a + (+p.price || 0) * (+p.units || 0), 0), var0 = P.reduce((a, p) => a + (+p.unit_cost || 0) * (+p.units || 0), 0);
+  const ramp = Math.max(1, Math.min(18, +d.ramp_months || 6)), g = Math.max(-0.5, Math.min(1, (+d.growth || 0) / 100));
+  const wc = fixed * 3, invest = capex + wc, months = [];
+  let cum = -invest, payback = null;
+  for (let m = 1; m <= 60; m++){
+    const f = Math.min(1, 0.4 + 0.6 * (m - 1) / ramp) * Math.pow(1 + g, Math.floor((m - 1) / 12));
+    const rev = rev0 * f, vc = var0 * f, net = rev - vc - fixed; cum += net; months.push({m, rev, net, cum});
+    if (payback == null && cum >= 0) payback = m;
+  }
+  const years = [0, 1, 2, 3, 4].map(y => { const ms = months.slice(y * 12, y * 12 + 12); return {rev: ms.reduce((a, x) => a + x.rev, 0), net: ms.reduce((a, x) => a + x.net, 0)}; });
+  const flows = [-invest, ...years.map(y => y.net)], r = st.rate || FEAS_RATE;
+  const npv = k => flows.reduce((a, c, i) => a + c / Math.pow(1 + k, i), 0);
+  let irr = null; if (npv(0) > 0 && npv(5) < 0){ let lo = 0, hi = 5; for (let i = 0; i < 80; i++){ const mid = (lo + hi) / 2; npv(mid) > 0 ? lo = mid : hi = mid; } irr = (lo + hi) / 2; }
+  const marginPerRev = rev0 ? (rev0 - var0) / rev0 : 0, breakEvenRev = marginPerRev > 0 ? fixed / marginPerRev : null;
+  const steady = rev0 - var0 - fixed;
+  const verdict = steady <= 0 ? "no" : payback && payback <= 30 && (irr == null || irr > r) ? "go" : payback && payback <= 48 ? "caution" : "no";
+  return {capex, wc, invest, fixed, rev0, var0, steady, payback, years, npv: npv(r), irr, breakEvenRev, breakEvenPct: breakEvenRev && rev0 ? breakEvenRev / rev0 : null, verdict, overCapital: st.capital ? invest > st.capital : false};
+}
+const FEAS_VERDICT = {go: ["✅ مشجّع", "var(--breeze)"], caution: ["⚠️ ممكن بحذر", "#b7791f"], no: ["⛔ مش مجدي بالأرقام دي", "var(--danger)"]};
+/* ---------- AI: study ---------- */
+async function feasRun(st, btn){
+  const sample = await getSample(); if (!sample){ toast("محتاج مصدر ذكاء شغال."); return; }
+  st.state = "loading"; store.save(); if (feasOpenId === st.id) openFeas(st.id);
+  const today = localISO(new Date()).slice(0, 10);
+  const prompt = `You are a senior feasibility-study consultant for small and medium projects in EGYPT. Today is ${today}.
+Project idea (Arabic): """${String(st.idea).slice(0, 300)}"""${st.city ? `\nLocation: ${st.city}, Egypt` : "\nLocation: Egypt (assume a mid-size Egyptian city if not stated)"}${st.capital ? `\nAvailable capital: ${Math.round(st.capital)} EGP` : ""}${st.notes ? `\nOwner notes: ${String(st.notes).slice(0, 300)}` : ""}
+Use web search NOW for CURRENT Egyptian market facts: demand signals, competitors, typical selling prices, equipment and rent prices, salaries, licensing (GAFI, local authority, health/industrial permits). Prefer sources from the last 12 months. Prices in EGP.
+Give realistic, conservative ASSUMPTIONS only — do NOT compute profit, payback or NPV yourself.
+Reply with ONLY one JSON object, all text in simple Egyptian Arabic:
+{"title":"<short project name>","summary":"<3 sentences>",
+"market":{"demand":["<evidence of demand with numbers and year>"],"customers":["<target segment>"],"competitors":[{"name":"<type or real name>","note":"<price/strength>"}],"gap":"<the opportunity>","size_note":"<market size if found, with year>"},
+"location":"<where to open and why>",
+"capex":[{"item":"<equipment/fit-out/license/deposit…>","cost":<EGP>}],
+"opex":[{"item":"<rent, utilities, marketing, maintenance…>","cost":<EGP per month>}],
+"staff":[{"role":"<job>","count":<n>,"salary":<EGP per month each>}],
+"products":[{"name":"<product/service>","price":<EGP selling price per unit>,"unit_cost":<EGP variable cost per unit>,"units":<units sold per month at full operation, conservative>}],
+"ramp_months":<months to reach full sales>,"growth":<yearly sales growth %>,
+"licenses":["<license/permit and the authority>"],
+"risks":[{"risk":"<risk>","mitigation":"<how>"}],
+"kpis":[{"name":"<success criterion>","target":"<measurable target>"}],
+"success_factors":["<critical success factor>"],
+"first_steps":["<what to do this month>"],
+"sources":[{"title":"<page>","url":"<url>"}]}`;
+  const lab = btn ? btn.textContent : "";
+  if (btn){ btn.disabled = true; btn.textContent = "بدرس السوق…"; }
+  try{
+    const raw = await sample.json(prompt, {modelTier: "default", webSearch: true, cache: false});
+    const num = v => Math.max(0, toNumber(v) || 0), str = (v, n = 300) => typeof v === "string" ? v.trim().slice(0, n) : "", arr = (v, n) => Array.isArray(v) ? v.slice(0, n) : [];
+    const d = {title: str(raw.title, 80) || st.idea, summary: str(raw.summary, 600),
+      market: {demand: arr(raw.market && raw.market.demand, 6).map(x => str(x)), customers: arr(raw.market && raw.market.customers, 5).map(x => str(x, 120)),
+        competitors: arr(raw.market && raw.market.competitors, 6).map(c => ({name: str(c && c.name, 80), note: str(c && c.note, 160)})).filter(c => c.name), gap: str(raw.market && raw.market.gap), size: str(raw.market && raw.market.size_note)},
+      location: str(raw.location),
+      capex: arr(raw.capex, 20).map(x => ({item: str(x && x.item, 80), cost: num(x && x.cost)})).filter(x => x.item),
+      opex: arr(raw.opex, 15).map(x => ({item: str(x && x.item, 80), cost: num(x && x.cost)})).filter(x => x.item),
+      staff: arr(raw.staff, 10).map(x => ({role: str(x && x.role, 60), count: Math.max(1, Math.round(num(x && x.count)) || 1), salary: num(x && x.salary)})).filter(x => x.role),
+      products: arr(raw.products, 8).map(x => ({name: str(x && x.name, 80), price: num(x && x.price), unit_cost: num(x && x.unit_cost), units: num(x && x.units)})).filter(x => x.name && x.price),
+      ramp_months: Math.max(1, Math.min(18, num(raw.ramp_months) || 6)), growth: Math.max(-20, Math.min(50, toNumber(raw.growth) || 5)),
+      licenses: arr(raw.licenses, 8).map(x => str(x, 160)), risks: arr(raw.risks, 8).map(r => ({risk: str(r && r.risk, 160), mitigation: str(r && r.mitigation, 200)})).filter(r => r.risk),
+      kpis: arr(raw.kpis, 8).map(k => ({name: str(k && k.name, 100), target: str(k && k.target, 120)})).filter(k => k.name),
+      success: arr(raw.success_factors, 8).map(x => str(x, 160)), steps: arr(raw.first_steps, 6).map(x => str(x, 160)),
+      sources: mergeSources(arr(raw.sources, 12).filter(x => x && /^https?:\/\//.test(x.url || "")).map(x => ({url: x.url, title: str(x.title, 120)})), raw._sources)};
+    if (!d.products.length || !d.capex.length) throw new Error("incomplete study");
+    st.data = d; st.state = "ready"; st.updatedAt = nowISO(); st.provider = window.NASEM_APP ? window.NASEM_APP.state.lastProvider : null;
+    toast("دراسة الجدوى جاهزة ✓");
+  }catch(e){ console.warn(e); st.state = st.data ? "ready" : "failed"; toast("ما قدرتش أكمّل الدراسة دلوقتي. جرّب تاني."); }
+  finally{ if (btn){ btn.disabled = false; btn.textContent = lab; } store.save(); render(); if (feasOpenId === st.id) openFeas(st.id); }
+}
+/* ---------- AI: suggest projects ---------- */
+async function feasSuggest(q, out, btn){
+  const sample = await getSample(); if (!sample){ toast("محتاج مصدر ذكاء شغال."); return; }
+  const today = localISO(new Date()).slice(0, 10);
+  const prompt = `You are a top Egyptian small-business strategist. Today is ${today}. Use web search NOW to study CURRENT demand in Egypt and propose the best projects for this person.
+Capital: ${q.capital ? Math.round(q.capital) + " EGP" : "not stated (assume modest)"}; city: ${q.city || "Egypt"}; experience/interests: ${q.skills || "not stated"}; time: ${q.time || "not stated"}; risk appetite: ${q.risk || "medium"}; must be halal and legal in Egypt.
+Rank by real demand evidence (recent numbers, trends, gaps) and fit to the capital. No pyramid/crypto/forex schemes.
+Reply with ONLY JSON, text in simple Egyptian Arabic:
+{"market_note":"<2 sentences about what is in demand now>","ideas":[{"name":"<project>","why":"<demand evidence with a number or source>","capital_min":<EGP>,"capital_max":<EGP>,"monthly_profit":"<realistic range EGP after ramp-up>","payback_months":<number>,"difficulty":"<سهل|متوسط|صعب>","fit":<0-100>,"success_criteria":["<measurable criterion>"],"risks":["<risk>"],"first_steps":["<step>"]}],"sources":[{"title":"<page>","url":"<url>"}]}
+Give 4 or 5 ideas.`;
+  const lab = btn.textContent; btn.disabled = true; btn.textContent = "بدرس السوق وبفكر…"; out.replaceChildren(h("div",{class: "att-note"}, "بدوّر على الطلب في السوق والفرص اللي تناسبك… ده ممكن ياخد دقيقة."));
+  try{
+    const raw = await sample.json(prompt, {modelTier: "default", webSearch: true, cache: false});
+    const ideas = (Array.isArray(raw.ideas) ? raw.ideas : []).slice(0, 6).filter(x => x && x.name);
+    if (!ideas.length) throw new Error("no ideas");
+    const src = mergeSources((raw.sources || []).filter(x => x && /^https?:\/\//.test(x.url || "")), raw._sources).list;
+    S.feasLastSuggest = {q, at: nowISO(), note: String(raw.market_note || "").slice(0, 400), ideas: ideas.map(x => ({name: String(x.name).slice(0, 80), why: String(x.why || "").slice(0, 300),
+      cmin: toNumber(x.capital_min) || null, cmax: toNumber(x.capital_max) || null, profit: String(x.monthly_profit || "").slice(0, 60), payback: toNumber(x.payback_months) || null,
+      diff: String(x.difficulty || "").slice(0, 10), fit: Math.max(0, Math.min(100, toNumber(x.fit) || 0)), crit: (x.success_criteria || []).slice(0, 6).map(c => String(c).slice(0, 140)),
+      risks: (x.risks || []).slice(0, 4).map(c => String(c).slice(0, 140)), steps: (x.first_steps || []).slice(0, 4).map(c => String(c).slice(0, 140))})).sort((a, b) => b.fit - a.fit), sources: src};
+    store.save(); feasIdeasView(out);
+  }catch(e){ console.warn(e); out.replaceChildren(h("div",{class: "att-note"}, "ما قدرتش أكمّل دلوقتي. جرّب تاني بعد شوية.")); }
+  finally{ btn.disabled = false; btn.textContent = lab; }
+}
+function feasIdeasView(out){
+  const r = S.feasLastSuggest; if (!r) return;
+  out.replaceChildren(r.note ? h("p",{}, "📈 " + r.note) : "", ...r.ideas.map((x, i) => h("div",{class: "card", style: "padding:10px;margin:6px 0"},
+    h("div",{class: "row", style: "justify-content:space-between;align-items:center"}, h("b",{}, `${fmtN(i + 1)}. ${x.name}`), h("span",{class: "chip"}, `مناسب لك ${fmtN(x.fit)}%`)),
+    x.why ? h("div",{class: "sub"}, "ليه: " + x.why) : null,
+    h("div",{class: "sub"}, [x.cmin ? `رأس المال ${fmtMoney(x.cmin)}${x.cmax ? " – " + fmtMoney(x.cmax).replace(" جنيه", "") : ""}` : null, x.profit ? `ربح شهري ${x.profit}` : null, x.payback ? `يرجّع فلوسه في ~${fmtN(x.payback)} شهر` : null, x.diff ? `الصعوبة: ${x.diff}` : null].filter(Boolean).join(" • ")),
+    x.crit.length ? h("details",{}, h("summary",{}, "🎯 معايير النجاح"), h("ul",{class: "plain"}, x.crit.map(c => h("li",{}, "• " + c)))) : null,
+    x.risks.length ? h("details",{}, h("summary",{}, "⚠️ المخاطر"), h("ul",{class: "plain"}, x.risks.map(c => h("li",{}, "• " + c)))) : null,
+    x.steps.length ? h("details",{}, h("summary",{}, "👣 أول خطوات"), h("ul",{class: "plain"}, x.steps.map(c => h("li",{}, "• " + c)))) : null,
+    h("button",{class: "btn primary", style: "margin-top:6px", onclick: () => { const st = feasNew({idea: x.name, capital: r.q.capital, city: r.q.city, notes: [r.q.skills, r.q.time].filter(Boolean).join("، ")}); openFeas(st.id); feasRun(st); }}, "📊 اعمل دراسة جدوى كاملة"))),
+    r.sources && r.sources.length ? h("details",{}, h("summary",{}, `المصادر (${fmtN(r.sources.length)})`), h("ul",{class: "plain"}, r.sources.map(s0 => h("li",{}, h("a",{href: s0.url, target: "_blank", rel: "noopener"}, s0.title || s0.host))))) : null,
+    h("p",{class: "att-note"}, "اقتراحات مبنية على بحث في السوق وقت الطلب. قبل ما تصرف فلوس: اسأل 10 زباين محتملين، وزور 3 منافسين، واعمل الدراسة الكاملة."));
+}
+function openFeasHome(tab = "suggest", pre = {}){
+  feasOpenId = null;
+  const out = h("div",{});
+  const cap = h("input",{class: "voice-select", type: "text", inputmode: "numeric", dir: "rtl", placeholder: "رأس المال (مثلاً 200 ألف)", value: pre.capital ? String(pre.capital) : ""});
+  const city = h("input",{class: "voice-select", placeholder: "المحافظة أو المدينة", value: pre.city || ""});
+  const skills = h("textarea",{class: "voice-select", rows: "2", placeholder: "خبرتك واهتماماتك (مثلاً: مهندس، بحب الأكل، عندي محل…)"});
+  const time = h("select",{class: "voice-select"}, ["متفرغ كامل", "نص وقت جنب شغلي", "عايز حد يديره"].map(x => h("option",{}, x)));
+  const risk = h("select",{class: "voice-select"}, ["مخاطرة قليلة", "مخاطرة متوسطة", "مخاطرة عالية بعائد أعلى"].map(x => h("option",{selected: x === "مخاطرة متوسطة" || null}, x)));
+  const idea = h("textarea",{class: "voice-select", rows: "2", placeholder: "فكرة المشروع (مثلاً: مغسلة عربيات، مطعم كشري، مصنع طوب، تطبيق توصيل…)", value: pre.idea || ""});
+  const sugBtn = h("button",{class: "btn primary", onclick: e => feasSuggest({capital: feasParseMoney(cap.value), city: city.value.trim(), skills: skills.value.trim(), time: time.value, risk: risk.value}, out, e.currentTarget)}, "💡 اقترح عليّ مشاريع");
+  const stBtn = h("button",{class: "btn primary", onclick: () => { if (idea.value.trim().length < 3){ toast("اكتب فكرة المشروع."); return; } const st = feasNew({idea: idea.value.trim(), capital: feasParseMoney(cap.value), city: city.value.trim(), notes: skills.value.trim()}); openFeas(st.id); feasRun(st); }}, "📊 اعمل دراسة الجدوى");
+  const tabs = h("div",{class: "seg", role: "group"});
+  const body = h("div",{});
+  const show = t => { tabs.replaceChildren(h("button",{"aria-pressed": String(t === "suggest"), onclick: () => show("suggest")}, "💡 اقترح مشروع"), h("button",{"aria-pressed": String(t === "study"), onclick: () => show("study")}, "📊 دراسة جدوى لفكرتي"));
+    body.replaceChildren(...(t === "suggest" ? [cap, city, skills, h("div",{class: "row"}, time, risk), sugBtn, out] : [idea, cap, city, skills, stBtn])); if (t === "suggest" && S.feasLastSuggest && !out.childNodes.length) feasIdeasView(out); };
+  sheet.replaceChildren(h("h2",{id: "sheetTitle"}, "📊 دراسات الجدوى"), tabs, body, h("div",{class: "row"}, h("button",{class: "btn ghost", onclick: closeSheet}, "تمام")));
+  show(tab); sheetBack.hidden = false;
+}
+function feasReportText(st){
+  const d = st.data, M = feasModel(st); if (!d || !M) return "";
+  const L = [`📊 دراسة جدوى: ${d.title}`, d.summary, "", `الحكم: ${FEAS_VERDICT[M.verdict][0]}`,
+    `• الاستثمار المطلوب: ${fmtMoney(M.invest)} (أصول ${fmtMoney(M.capex)} + رأس مال عامل 3 شهور ${fmtMoney(M.wc)})`,
+    `• المبيعات الشهرية بعد الاستقرار: ${fmtMoney(M.rev0)}`, `• المصاريف الثابتة الشهرية: ${fmtMoney(M.fixed)}`, `• صافي الربح الشهري بعد الاستقرار: ${fmtMoney(M.steady)}`,
+    M.breakEvenRev ? `• نقطة التعادل: مبيعات ${fmtMoney(M.breakEvenRev)} في الشهر (${fmtN(Math.round(M.breakEvenPct * 100))}% من المتوقع)` : "",
+    `• استرداد رأس المال: ${M.payback ? `حوالي ${fmtN(M.payback)} شهر` : "أكتر من 5 سنين"}`,
+    `• صافي القيمة الحالية (5 سنين، خصم ${fmtN(Math.round((st.rate || FEAS_RATE) * 100))}%): ${fmtMoney(M.npv)}`, M.irr != null ? `• معدل العائد الداخلي: ${fmtN(Math.round(M.irr * 100))}% سنوياً` : "",
+    "", "▪️ السوق", ...d.market.demand.map(x => "- " + x), d.market.gap ? "الفرصة: " + d.market.gap : "", d.market.customers.length ? "الزباين: " + d.market.customers.join("، ") : "",
+    d.market.competitors.length ? "المنافسين: " + d.market.competitors.map(c => c.name + (c.note ? ` (${c.note})` : "")).join("، ") : "",
+    d.location ? "\n▪️ المكان\n" + d.location : "",
+    "", "▪️ التكاليف الاستثمارية", ...d.capex.map(x => `- ${x.item}: ${fmtMoney(x.cost)}`),
+    "", "▪️ المصاريف الشهرية", ...d.opex.map(x => `- ${x.item}: ${fmtMoney(x.cost)}`), ...d.staff.map(x => `- ${x.role} × ${fmtN(x.count)}: ${fmtMoney(x.salary * x.count)}`),
+    "", "▪️ المنتجات والمبيعات", ...d.products.map(p => `- ${p.name}: ${fmtN(p.units)} في الشهر × ${fmtMoney(p.price)} (تكلفته ${fmtMoney(p.unit_cost)})`),
+    "", "▪️ 5 سنين", ...M.years.map((y, i) => `السنة ${fmtN(i + 1)}: مبيعات ${fmtMoney(y.rev)} • صافي ${fmtMoney(y.net)}`),
+    d.licenses.length ? "\n▪️ التراخيص\n" + d.licenses.map(x => "- " + x).join("\n") : "",
+    d.kpis.length ? "\n▪️ معايير النجاح\n" + d.kpis.map(k => `- ${k.name}: ${k.target}`).join("\n") : "",
+    d.risks.length ? "\n▪️ المخاطر\n" + d.risks.map(r => `- ${r.risk} ← ${r.mitigation}`).join("\n") : "",
+    d.steps.length ? "\n▪️ أول خطوات\n" + d.steps.map(x => "- " + x).join("\n") : "",
+    d.sources && d.sources.list && d.sources.list.length ? "\n▪️ المصادر\n" + d.sources.list.map(s0 => `- ${s0.title || s0.host}: ${s0.url}`).join("\n") : "",
+    "", "الأرقام افتراضات استرشادية من بحث في السوق. راجعها بنفسك قبل أي قرار استثمار، واستشير محاسب."];
+  return L.filter(x => x !== "").join("\n");
+}
+let feasOpenId = null;
+function openFeas(id){
+  const st = (S.studies || []).find(x => x.id === id); if (!st){ toast("الدراسة مش موجودة."); return; }
+  feasOpenId = id;
+  const head = h("h2",{id: "sheetTitle"}, "📊 " + (st.data ? st.data.title : st.idea));
+  if (st.state === "loading" || !st.data){
+    sheet.replaceChildren(head, h("div",{class: "card", style: "padding:12px"}, st.state === "failed" ? "الدراسة ما كملتش." : "⏳ بدرس السوق والمنافسين والأسعار من النت… ده بياخد دقيقة تقريباً. ممكن تقفل وترجع، هتلاقيها في فلوسي ← دراسات الجدوى."),
+      st.state === "failed" ? h("button",{class: "btn primary", onclick: e => feasRun(st, e.currentTarget)}, "جرّب تاني") : null,
+      h("div",{class: "row"}, h("button",{class: "btn ghost", onclick: () => { feasOpenId = null; closeSheet(); }}, "تمام")));
+    sheetBack.hidden = false; return;
+  }
+  const d = st.data, M = feasModel(st), [vt, vc] = FEAS_VERDICT[M.verdict];
+  const kpi = (label, val, sub) => h("div",{class: "card", style: "padding:8px;flex:1 1 45%;min-width:140px"}, h("div",{class: "sub"}, label), h("b",{style: "font-size:1.1em"}, val), sub ? h("div",{class: "sub"}, sub) : null);
+  const redo = () => { store.save(); render(); openFeas(id); };
+  const ed = (obj, key, w = 100) => { const i = h("input",{class: "voice-select", type: "number", inputmode: "decimal", dir: "ltr", value: String(obj[key] ?? ""), style: `max-width:${w}px;padding:4px`}); i.onchange = () => { obj[key] = Math.max(0, +i.value || 0); redo(); }; return i; };
+  const list = (title, rows, open) => h("details",{class: "card", style: "padding:8px;margin:4px 0", open: open || null}, h("summary",{}, h("b",{}, title)), rows);
+  // 5-year bars
+  const maxY = Math.max(1, ...M.years.map(y => Math.abs(y.net)));
+  const bars = h("div",{style: "display:flex;gap:6px;align-items:flex-end;height:90px;margin:8px 0"}, M.years.map((y, i) => h("div",{style: "flex:1;text-align:center"},
+    h("div",{style: `height:${Math.round(Math.abs(y.net) / maxY * 70)}px;background:${y.net >= 0 ? "var(--breeze)" : "var(--danger)"};border-radius:6px 6px 0 0`}), h("div",{class: "sub"}, `س${fmtN(i + 1)}`))));
+  const txt = () => feasReportText(st);
+  sheet.replaceChildren(head,
+    h("div",{class: "card", style: `padding:10px;border-inline-start:4px solid ${vc}`}, h("b",{style: `color:${vc}`}, vt), d.summary ? h("p",{style: "margin:6px 0 0"}, d.summary) : null,
+      M.overCapital ? h("div",{class: "sub", style: "color:var(--danger)"}, `المطلوب ${fmtMoney(M.invest)} أكتر من رأس مالك ${fmtMoney(st.capital)}.`) : null),
+    h("div",{style: "display:flex;flex-wrap:wrap;gap:6px;margin:6px 0"},
+      kpi("الاستثمار المطلوب", fmtMoney(M.invest), `منه ${fmtMoney(M.wc)} رأس مال عامل`),
+      kpi("صافي الربح الشهري", fmtMoney(M.steady), "بعد ما المبيعات تستقر"),
+      kpi("استرداد رأس المال", M.payback ? `${fmtN(M.payback)} شهر` : "أكتر من 5 سنين"),
+      kpi("نقطة التعادل", M.breakEvenRev ? fmtMoney(M.breakEvenRev) : "—", M.breakEvenPct ? `${fmtN(Math.round(M.breakEvenPct * 100))}% من المبيعات المتوقعة` : null),
+      kpi("صافي القيمة الحالية", fmtMoney(M.npv), `5 سنين بخصم ${fmtN(Math.round((st.rate || FEAS_RATE) * 100))}%`),
+      kpi("العائد الداخلي IRR", M.irr != null ? `${fmtN(Math.round(M.irr * 100))}%` : "—", "سنوياً")),
+    h("div",{class: "sub"}, "صافي الربح لكل سنة:"), bars,
+    h("div",{class: "row", style: "flex-wrap:wrap"},
+      h("button",{class: "btn ghost", onclick: () => printReport(txt())}, "📄 تقرير PDF"), h("button",{class: "btn ghost", onclick: () => openUrl(waLink(null, txt()))}, "واتساب"),
+      h("button",{class: "btn ghost", onclick: () => copyText(txt())}, "انسخ"), h("button",{class: "btn ghost", onclick: e => feasRun(st, e.currentTarget)}, "🔄 حدّث الدراسة")),
+    list("📈 السوق والطلب", h("div",{}, d.market.size ? h("p",{}, d.market.size) : null, h("ul",{class: "plain"}, d.market.demand.map(x => h("li",{}, "• " + x))),
+      d.market.gap ? h("p",{}, h("b",{}, "الفرصة: "), d.market.gap) : null, d.market.customers.length ? h("p",{}, h("b",{}, "الزباين: "), d.market.customers.join("، ")) : null,
+      d.market.competitors.length ? h("div",{}, h("b",{}, "المنافسين:"), h("ul",{class: "plain"}, d.market.competitors.map(c => h("li",{}, `• ${c.name}${c.note ? " — " + c.note : ""}`)))) : null,
+      d.location ? h("p",{}, h("b",{}, "المكان: "), d.location) : null), true),
+    list("💡 المنتجات والمبيعات (عدّل الأرقام وكل حاجة تتحسب تاني)", h("div",{}, d.products.map(p => h("div",{style: "margin:6px 0"}, h("div",{}, p.name),
+      h("div",{class: "row", style: "flex-wrap:wrap;gap:4px;align-items:center"}, h("span",{class: "sub"}, "السعر"), ed(p, "price", 90), h("span",{class: "sub"}, "تكلفته"), ed(p, "unit_cost", 90), h("span",{class: "sub"}, "كمية/شهر"), ed(p, "units", 80)))),
+      h("div",{class: "row", style: "gap:4px;align-items:center;flex-wrap:wrap"}, h("span",{class: "sub"}, "شهور لحد الاستقرار"), ed(d, "ramp_months", 60), h("span",{class: "sub"}, "نمو سنوي %"), ed(d, "growth", 60), h("span",{class: "sub"}, "معدل الخصم %"),
+        (() => { const i = h("input",{class: "voice-select", type: "number", dir: "ltr", value: String(Math.round((st.rate || FEAS_RATE) * 100)), style: "max-width:60px;padding:4px"}); i.onchange = () => { st.rate = Math.max(1, +i.value || 25) / 100; redo(); }; return i; })()))),
+    list(`🏗️ التكاليف الاستثمارية — ${fmtMoney(M.capex)}`, h("div",{}, d.capex.map(x => h("div",{class: "row", style: "justify-content:space-between;align-items:center"}, h("span",{}, x.item), ed(x, "cost", 110))))),
+    list(`🧾 المصاريف الشهرية — ${fmtMoney(M.fixed)}`, h("div",{}, d.opex.map(x => h("div",{class: "row", style: "justify-content:space-between;align-items:center"}, h("span",{}, x.item), ed(x, "cost", 110))),
+      d.staff.map(x => h("div",{class: "row", style: "justify-content:space-between;align-items:center"}, h("span",{}, `${x.role} (${fmtN(x.count)})`), ed(x, "salary", 110))))),
+    d.kpis.length ? list("🎯 معايير النجاح", h("ul",{class: "plain"}, d.kpis.map(k => h("li",{}, `• ${k.name}: `, h("b",{}, k.target)))), true) : "",
+    d.success.length ? list("⭐ عوامل النجاح الأساسية", h("ul",{class: "plain"}, d.success.map(x => h("li",{}, "• " + x)))) : "",
+    d.risks.length ? list("⚠️ المخاطر وإزاي تتجنبها", h("ul",{class: "plain"}, d.risks.map(r => h("li",{}, `• ${r.risk}`, r.mitigation ? h("div",{class: "sub"}, "← " + r.mitigation) : null)))) : "",
+    d.licenses.length ? list("📋 التراخيص", h("ul",{class: "plain"}, d.licenses.map(x => h("li",{}, "• " + x)))) : "",
+    d.steps.length ? list("👣 أول خطوات", h("ol",{class: "plain"}, d.steps.map(x => h("li",{}, x)))) : "",
+    d.sources && d.sources.list && d.sources.list.length ? list(`🔗 المصادر (${fmtN(d.sources.list.length)})`, h("ul",{class: "plain"}, d.sources.list.map(s0 => h("li",{}, h("a",{href: s0.url, target: "_blank", rel: "noopener"}, s0.title || s0.host), s0.official ? " ✓ رسمي" : "")))) : "",
+    h("p",{class: "att-note"}, `الذكاء جاب افتراضات السوق${st.provider && window.NASEM_APP ? " (" + window.NASEM_APP.PROVIDER_NAMES[st.provider] + ")" : ""} ${st.updatedAt ? "يوم " + fmtDate(st.updatedAt) : ""}، والحسابات المالية اتعملت على موبايلك. دي دراسة استرشادية، مش بديل عن محاسب أو مستشار.`),
+    h("div",{class: "row"}, h("button",{class: "btn ghost", onclick: () => { if (confirm("أمسح الدراسة دي؟")){ S.studies = S.studies.filter(x => x.id !== id); feasOpenId = null; store.save(); render(); closeSheet(); } }}, "امسح"),
+      h("button",{class: "btn ghost", onclick: () => { feasOpenId = null; closeSheet(); }}, "تمام")));
+  sheetBack.hidden = false;
+}
+function studiesSection(){
+  const box = h("div",{}, h("div",{class: "section-title"}, "📊 دراسات الجدوى"));
+  box.append(h("div",{class: "row", style: "flex-wrap:wrap"}, h("button",{class: "btn primary", onclick: () => openFeasHome("suggest")}, "💡 اقترح عليّ مشروع"), h("button",{class: "btn ghost", onclick: () => openFeasHome("study")}, "📊 دراسة جدوى لفكرتي")));
+  for (const st of S.studies || []){
+    const M = st.data ? feasModel(st) : null;
+    box.append(h("button",{class: "card", style: "display:block;width:100%;text-align:start;padding:10px;margin:4px 0", onclick: () => openFeas(st.id)},
+      h("b",{}, st.data ? st.data.title : st.idea), h("div",{class: "sub"}, M ? `${FEAS_VERDICT[M.verdict][0]} • استثمار ${fmtMoney(M.invest)} • ربح شهري ${fmtMoney(M.steady)} • استرداد ${M.payback ? fmtN(M.payback) + " شهر" : "+5 سنين"}` : st.state === "loading" ? "⏳ جاري الدراسة…" : "ما كملتش — افتحها وجرّب تاني")));
+  }
+  if (!(S.studies || []).length) box.append(h("div",{class: "att-note", style: "margin:4px"}, "قول \"دراسة جدوى لمغسلة عربيات في المنصورة برأس مال 300 ألف\" أو \"اقترح عليّ مشروع بـ 200 ألف\"."));
+  return box;
+}
+
 /* ---------------- misc ---------------- */
 let toastTimer;
 /* ================= Shared helpers for the books: الحسابات، الجمعيات، الصنايعية ================= */
@@ -6042,7 +6299,7 @@ function renderMoney(){
     return;
   }
   p.append(moneySummary());
-  const jumps = [["sec-acc", "📒 الحسابات"], ["sec-gam", "🤝 الجمعيات"], ["sec-loans", "💵 السلف"], ["sec-spend", "💸 المصروف"], ["sec-market", "📈 السوق"], ["sec-proj", "🏗️ مشروعك"]];
+  const jumps = [["sec-acc", "📒 الحسابات"], ["sec-gam", "🤝 الجمعيات"], ["sec-loans", "💵 السلف"], ["sec-spend", "💸 المصروف"], ["sec-market", "📈 السوق"], ["sec-proj", "🏗️ مشروعك"], ["sec-feas", "📊 الجدوى"]];
   p.append(h("div",{class: "chips jumpbar"}, jumps.map(([id, t]) => h("button",{class: "chip", onclick: () => { const el = document.getElementById(id); if (el) el.scrollIntoView({behavior: "smooth", block: "start"}); }}, t))));
   p.append(safeSec(accountsSection, "الحسابات", "sec-acc"));
   p.append(safeSec(gamSection, "الجمعيات", "sec-gam"));
@@ -6050,6 +6307,7 @@ function renderMoney(){
   p.append(safeSec(spendSection, "المصروف", "sec-spend"));
   p.append(safeSec(marketSection, "نبض السوق", "sec-market"));
   p.append(safeSec(projectsSection, "تكلفة مشروعك", "sec-proj"));
+  p.append(safeSec(studiesSection, "دراسات الجدوى", "sec-feas"));
 }
 
 /* ================= تقرير الشهر: صفحة واحدة لكل الفلوس، تتبعت أو تتطبع ================= */
