@@ -2025,7 +2025,10 @@ function speak(text, force = false, report = false){
   if (cloud){
     if (hasTTS) speechSynthesis.cancel();
     cloudPending = true;
-    window.NASEM_APP.tts.speak(clean, lang, ttsPrefs.rate, speechMood(clean)).then(() => { ttsHealth = "ok"; }).finally(() => { cloudPending = false; }).catch(e => {
+    // A cloud voice that hasn't started in 8 seconds is as good as failed: fall back to the phone's voice.
+    const sounding = () => { try{ const pl = window.NASEM_APP.tts.player && window.NASEM_APP.tts.player(); return !!pl && !pl.paused && pl.currentTime > 0; }catch(e){ return false; } };
+    const guard = new Promise((_, rej) => setTimeout(() => { if (cloudPending && !sounding()){ try{ window.NASEM_APP.tts.stop(); }catch(e){} rej(Object.assign(new Error("tts timeout"), {code: "timeout"})); } }, 8000));
+    Promise.race([window.NASEM_APP.tts.speak(clean, lang, ttsPrefs.rate, speechMood(clean)), guard]).then(() => { ttsHealth = "ok"; }).finally(() => { cloudPending = false; }).catch(e => {
       console.warn("cloud voice failed, using the phone voice", e);
       if (report) toast(e && e.code === "bad_key" ? "مفتاح الصوت اترفض، هكمّل بصوت الموبايل." : "الصوت المصري مش متاح دلوقتي، هكمّل بصوت الموبايل.");
       speakDevice(clean, lang, report);
@@ -2667,9 +2670,11 @@ function cloudVoiceSettings(){
 
 /* ---------------- identity: "تعرّف على نسيم" ---------------- */
 const APP = {
-  name: "نسيم", nameLatin: "NASEM AI", version: "إصدار 5.3 (تطبيق)",
+  name: "نسيم", nameLatin: "NASEM AI", version: "إصدار 5.4 (تطبيق)",
   updated: "2026-11-25",
   changes: [
+    "🔁 لو الذكاء زحمة لحظياً، نسيم بيعيد المحاولة لوحده قبل ما يقولك",
+    "🔊 لو الصوت المصري اتأخر، نسيم بيكمّل بصوت الموبايل على طول (في المكالمة كمان)",
     "🧭 الأقسام فوق بقت بأيقونات واضحة وكلها ظاهرة مرة واحدة، وأيقونة ⚙️ الإعدادات ظاهرة على طول",
     "⚡ الذكاء بقى يستخدم Gemini 3.6 Flash المتاح مجاناً على حسابك على طول",
     "📐 المقايسة بتفهم \"100م\" و\"10 في 10\"",

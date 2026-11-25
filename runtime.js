@@ -327,11 +327,17 @@
       audio = { media_type: mt, data_b64: await blobToB64(opts.audio) };
     }
     let res;
-    try {
-      res = await gwPost("/v1/gateway/complete", { prompt, tier: opts.modelTier === "quick" ? "quick" : "main", web_search: !!opts.webSearch, images, ...(audio ? { audio } : {}) }, opts.signal);
-    } catch (e) {
-      if ((e && e.name === "AbortError") || (opts.signal && opts.signal.aborted)) throw err("cancelled");
-      throw e && e.code ? e : err("llm_unavailable", "server unreachable");
+    const body = { prompt, tier: opts.modelTier === "quick" ? "quick" : "main", web_search: !!opts.webSearch, images, ...(audio ? { audio } : {}) };
+    for (let attempt = 0; attempt < 2; attempt++) {   // AI "high demand" spikes pass in seconds: one quiet retry before showing an error
+      try {
+        res = await gwPost("/v1/gateway/complete", body, opts.signal);
+      } catch (e) {
+        if ((e && e.name === "AbortError") || (opts.signal && opts.signal.aborted)) throw err("cancelled");
+        if (attempt === 0 && !(e && e.code === "login_required")) { await new Promise((r) => setTimeout(r, 2500)); continue; }
+        throw e && e.code ? e : err("llm_unavailable", "server unreachable");
+      }
+      if (res.status >= 500 && attempt === 0) { await new Promise((r) => setTimeout(r, 3000)); continue; }
+      break;
     }
     const d = await res.json().catch(() => ({}));
     if (res.ok && d.status === "success") { state.lastProvider = d.provider; return d.data; }
@@ -764,6 +770,7 @@
       else url = await azureAudio(text, lang, rate);
       player.pause(); player.src = url; await player.play();
     },
+    player: () => player || null,
     stop() { seq++; seqActive = false; if (player) player.pause(); },
     isPlaying() { return seqActive || (!!player && !player.paused && !player.ended); },
     unlock() {   // play a silent clip inside the first tap so later replies may autoplay

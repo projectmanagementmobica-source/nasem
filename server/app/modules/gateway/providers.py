@@ -6,6 +6,7 @@ second, regex-based masking layer (phones, IDs, amounts, emails) as defense in d
 
 from __future__ import annotations
 
+import asyncio
 import base64
 from dataclasses import dataclass, field
 from typing import Any, Literal, Protocol
@@ -230,14 +231,20 @@ class GeminiProvider:
             for model in models:
                 if model in _gemini_exhausted_today():
                     continue
-                try:
-                    res = await http.post(
-                        f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
-                        headers={"x-goog-api-key": key},
-                        json=payload,
-                    )
-                except httpx.HTTPError as exc:
-                    raise LLMUnavailableError(f"gemini connection: {exc}", retryable=True) from exc
+                for retry in range(2):           # "high demand" 503s are usually gone a second later
+                    try:
+                        res = await http.post(
+                            f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+                            headers={"x-goog-api-key": key},
+                            json=payload,
+                        )
+                    except httpx.HTTPError as exc:
+                        raise LLMUnavailableError(f"gemini connection: {exc}", retryable=True) from exc
+                    if res.status_code in (500, 502, 503, 504) and retry == 0 and settings.gemini_retry_delay > 0:
+                        await asyncio.sleep(settings.gemini_retry_delay)
+                        continue
+                    break
+                assert res is not None
                 if res.status_code == 429 and "tools" not in payload and re.search(r"limit:\s*0\b", res.text):
                     _mark_gemini_exhausted(model)        # no free quota at all for this model on this key -> skip it today
                     continue
