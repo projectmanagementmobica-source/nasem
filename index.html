@@ -5949,6 +5949,7 @@ function researchIntent(text){
   const s = arNorm(clean(text)).replace(/[؟?]/g, "").trim();
   for (const it of RESEARCH_RE){
     const [re, forced] = Array.isArray(it) ? it : [it, null], m = s.match(re);
+    if (forced === "prices" && m && /(دولار|يورو|ريال|استرليني|درهم|دينار|عمله|عملات|صرف|ذهب|دهب|عيار|جرام دهب)/.test(m[1])) return null;   // CBE rate / estimated gold have their own rules
     if (m && m[1].trim().length >= 2) return {q: text.trim(), topic: m[1].trim(), kind: forced ? RESEARCH_KINDS.find(x => x.k === forced) : researchKind(m[1])};
   }
   return null;
