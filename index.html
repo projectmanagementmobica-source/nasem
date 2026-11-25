@@ -4847,33 +4847,52 @@ Reply with ONLY JSON: {"concept":"<2 sentences in Egyptian Arabic>","floors":[{"
     const floors = Array.isArray(raw && raw.floors) ? raw.floors.slice(0, 10).map(f => ({name: String(f.name || "دور").slice(0, 40),
       rooms: (Array.isArray(f.rooms) ? f.rooms : []).slice(0, 16).map(r => ({name: String(r.name || "غرفة").slice(0, 30), w: Math.max(1, Math.min(30, toNumber(r.w) || 3)), l: Math.max(1, Math.min(30, toNumber(r.l) || 3))}))})).filter(f => f.rooms.length) : [];
     if (!floors.length) throw new Error("empty design");
-    p.build.design = {W, L: Lg, concept: String(raw.concept || "").slice(0, 400), floors, tips: (raw.tips || []).slice(0, 5).map(x => String(x).slice(0, 200)),
+    p.build.design = {scene: null, W, L: Lg, concept: String(raw.concept || "").slice(0, 400), floors, tips: (raw.tips || []).slice(0, 5).map(x => String(x).slice(0, 200)),
       code: (raw.code_notes || []).slice(0, 3).map(x => String(x).slice(0, 200)), at: nowISO(), provider: window.NASEM_APP ? window.NASEM_APP.state.lastProvider : null};
     toast("التصميم المبدئي جاهز ✓");
   }catch(e){ console.warn(e); toast("ما قدرتش أجهز التصميم دلوقتي. جرّب تاني."); }
   finally{ if (btn){ btn.disabled = false; btn.textContent = lab; } store.save(); if (buildOpenId === p.id) openBuild(p.id); }
 }
+/* Rooms packed in rows inside the footprint (meters). Shared by the 2D plan and the 3D studio. */
+function buildLayout(d, f){
+  // Recursive bisection: split the rooms into two groups of similar area and cut the rectangle along its longer side.
+  const W = d.W, L = d.L, rooms = f.rooms.map(r => ({name: r.name, dw: r.w, dl: r.l, a: Math.max(1, r.w * r.l)})), out = [];
+  const cut = (rs, x, y, w, h) => {
+    if (rs.length === 1){ out.push({...rs[0], x, y, w, h}); return; }
+    const sorted = rs.slice().sort((p, q) => q.a - p.a), A = [], B = []; let sa = 0, sb = 0;
+    for (const r of sorted){ if (sa <= sb){ A.push(r); sa += r.a; } else { B.push(r); sb += r.a; } }
+    const t = sa / (sa + sb);
+    if (w >= h){ cut(A, x, y, w * t, h); cut(B, x + w * t, y, w * (1 - t), h); }
+    else { cut(A, x, y, w, h * t); cut(B, x, y + h * t, w, h * (1 - t)); }
+  };
+  cut(rooms, 0, 0, W, L);
+  // the living room faces the street (front = y=L) so the main door opens there
+  const hub = out.find(r => /ريسبشن|صال|معيش|استقبال/.test(r.name)) || out.slice().sort((p, q) => q.w * q.h - p.w * p.h)[0];
+  if (hub && Math.abs(hub.y + hub.h - L) > 0.05 && Math.abs(hub.y) < 0.05) out.forEach(r => { r.y = L - r.y - r.h; });
+  return out.map(({a, ...r}) => r);
+}
+async function open3D(p, btn){
+  if (!p.build.design){ toast("بجهز التصميم الأول…"); await buildDesign(p, btn); if (!p.build.design) return; }
+  const d = p.build.design;
+  if (btn){ btn.disabled = true; btn.textContent = "بفتح المجسم…"; }
+  try{
+    const m = await import("./studio3d.js");
+    m.open({title: p.name, layout: {W: d.W, L: d.L, floors: d.floors.map(f => ({name: f.name, rooms: buildLayout(d, f)}))}, scene: d.scene || null,
+      onSave: sc => { d.scene = sc; store.save(); }});
+  }catch(e){ console.warn(e); toast("المجسم محتاج متصفح بيدعم 3D (WebGL). جرّب Chrome."); }
+  finally{ if (btn){ btn.disabled = false; btn.textContent = "🧊 شوفه 3D وافرشه"; } }
+}
 /* Schematic plan: rooms packed in rows inside the footprint, scaled to fit. Not to scale for construction. */
 function buildPlanSVG(d, f){
-  const W = d.W, L = d.L, rooms = f.rooms.map(r => ({...r, a: r.w * r.l})).sort((a, b) => b.a - a.a);
-  const tot = rooms.reduce((a, r) => a + r.a, 0) || 1, k = (W * L) / tot; rooms.forEach(r => { r.a *= k; });
-  const rows = []; let cur = [], curA = 0; const target = W * Math.max(2.8, Math.min(5, L / Math.ceil(rooms.length / 3)));
-  for (const r of rooms){ cur.push(r); curA += r.a; if (curA >= target * 0.9){ rows.push(cur); cur = []; curA = 0; } }
-  if (cur.length) rows.push(cur);
-  const S0 = 300 / Math.max(W, L), pad = 6; let y = 0, out = "";
-  const hue = n => ({"ريسبشن": "#d8ecf3", "صالة": "#d8ecf3", "مطبخ": "#fde9c8", "حمام": "#d6e8ff", "سلم": "#e3e3e3", "نوم": "#e2f3dc", "ماستر": "#e2f3dc"}[Object.keys({"ريسبشن":1,"صالة":1,"مطبخ":1,"حمام":1,"سلم":1,"نوم":1,"ماستر":1}).find(x => n.includes(x))] || "#f1ecf7");
-  for (const row of rows){
-    const ra = row.reduce((a, r) => a + r.a, 0), rh = ra / W; let x = 0;
-    for (const r of row){
-      const rw = r.a / rh, X = pad + x * S0, Y = pad + y * S0, w = rw * S0, hh = rh * S0;
-      out += `<rect x="${X.toFixed(1)}" y="${Y.toFixed(1)}" width="${w.toFixed(1)}" height="${hh.toFixed(1)}" fill="${hue(r.name)}" stroke="#334" stroke-width="1.5"/>`;
-      if (w > 18 && hh > 18) out += `<text x="${(X + w / 2).toFixed(1)}" y="${(Y + hh / 2).toFixed(1)}" text-anchor="middle" font-size="${w > 40 ? 10 : 8}" fill="#223">${escHtml(r.name)}</text><text x="${(X + w / 2).toFixed(1)}" y="${(Y + hh / 2 + 12).toFixed(1)}" text-anchor="middle" font-size="9" fill="#556">${fmtN(r.w)}×${fmtN(r.l)}</text>`;
-      x += rw;
-    }
-    y += rh;
+  const S0 = 300 / Math.max(d.W, d.L), pad = 6; let out = "";
+  const hue = n => /ريسبشن|صال|معيش/.test(n) ? "#d8ecf3" : /مطبخ/.test(n) ? "#fde9c8" : /حمام/.test(n) ? "#d6e8ff" : /سلم/.test(n) ? "#e3e3e3" : /نوم|ماستر/.test(n) ? "#e2f3dc" : "#f1ecf7";
+  for (const r of buildLayout(d, f)){
+    const X = pad + r.x * S0, Y = pad + r.y * S0, w = r.w * S0, hh = r.h * S0;
+    out += `<rect x="${X.toFixed(1)}" y="${Y.toFixed(1)}" width="${w.toFixed(1)}" height="${hh.toFixed(1)}" fill="${hue(r.name)}" stroke="#334" stroke-width="1.5"/>`;
+    if (w > 18 && hh > 18) out += `<text x="${(X + w / 2).toFixed(1)}" y="${(Y + hh / 2).toFixed(1)}" text-anchor="middle" font-size="${w > 40 ? 10 : 8}" fill="#223">${escHtml(r.name)}</text><text x="${(X + w / 2).toFixed(1)}" y="${(Y + hh / 2 + 12).toFixed(1)}" text-anchor="middle" font-size="9" fill="#556">${fmtN(Math.round(r.w * 10) / 10)}×${fmtN(Math.round(r.h * 10) / 10)}</text>`;
   }
-  const vw = W * S0 + pad * 2, vh = Math.max(L, y) * S0 + pad * 2;
-  return `<svg viewBox="0 0 ${vw.toFixed(0)} ${vh.toFixed(0)}" width="100%" style="max-width:420px;background:#fff;border-radius:8px" role="img" aria-label="مخطط مبدئي ${escHtml(f.name)}">${out}<rect x="${pad}" y="${pad}" width="${(W * S0).toFixed(1)}" height="${(Math.max(L, y) * S0).toFixed(1)}" fill="none" stroke="#111" stroke-width="3"/></svg>`;
+  const vw = d.W * S0 + pad * 2, vh = d.L * S0 + pad * 2;
+  return `<svg viewBox="0 0 ${vw.toFixed(0)} ${(vh + 14).toFixed(0)}" width="100%" style="max-width:420px;background:#fff;border-radius:8px" role="img" aria-label="مخطط مبدئي ${escHtml(f.name)}">${out}<rect x="${pad}" y="${pad}" width="${(d.W * S0).toFixed(1)}" height="${(d.L * S0).toFixed(1)}" fill="none" stroke="#111" stroke-width="3"/><text x="${(vw / 2).toFixed(0)}" y="${(vh + 10).toFixed(0)}" text-anchor="middle" font-size="9" fill="#556">⬇ الشارع والمدخل</text></svg>`;
 }
 const escHtml = s => String(s).replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
 let buildOpenId = null;
@@ -4913,7 +4932,9 @@ function openBuild(id){
     if (d.code && d.code.length) design.append(h("ul",{class: "plain"}, d.code.map(t => h("li",{}, "📋 " + t))));
     design.append(h("div",{class: "att-note"}, `مخطط تخطيطي مش بمقياس رسم${d.provider && window.NASEM_APP ? " • اقترحه " + window.NASEM_APP.PROVIDER_NAMES[d.provider] : ""}. الرسومات التنفيذية والترخيص من مكتب هندسي معتمد.`));
   } else design.append(h("div",{class: "att-note"}, "اكتب احتياجاتك فوق (عدد الغرف، شقة لكل دور، جراج…) واضغط الزرار، والمعماري الذكي يقترح توزيع الأدوار بالمقاسات."));
-  design.append(h("button",{class: "btn ghost", onclick: e => buildDesign(p, e.currentTarget)}, d ? "🔁 اقترح تصميم تاني" : "✏️ اقترح تصميم"));
+  design.append(h("div",{class: "row", style: "flex-wrap:wrap"},
+    h("button",{class: "btn primary", onclick: e => open3D(p, e.currentTarget)}, "🧊 شوفه 3D وافرشه"),
+    h("button",{class: "btn ghost", onclick: e => buildDesign(p, e.currentTarget)}, d ? "🔁 اقترح تصميم تاني" : "✏️ اقترح تصميم")));
   const txt = () => buildReportText(p);
   sheet.replaceChildren(h("h2",{id: "sheetTitle"}, "📐 " + p.name),
     h("div",{class: "card", style: "padding:10px"},
