@@ -4005,7 +4005,8 @@ function ownerBox(){
       await A.gateway.login(A.managedUrl(), em.value.trim(), pw.value); pw.value = "";
       localStorage.removeItem("nasem-activation");
       closeGate(); S.consent = S.consent || {version: CONSENT_VERSION, at: nowISO()}; store.save(); render();
-      toast("أهلاً يا صاحب نسيم 🎉"); if (!S.profile.onboarded) openQuickSetup();
+      toast("أهلاً يا صاحب نسيم 🎉");
+      if (!(lockCfg() && lockCfg().cred) && await bioAvailable()) openBioSetup(); else if (!S.profile.onboarded) openQuickSetup();
     }catch(x){ st.textContent = x.code === "bad_login" ? "الإيميل أو كلمة السر غلط." : "مش قادر أوصل للسيرفر دلوقتي. جرّب تاني."; }
   };
   pw.addEventListener("keydown", e => { if (e.key === "Enter") go(); });
@@ -5503,11 +5504,12 @@ function showLock(){
   v.replaceChildren(h("div",{class: "lock-card"},
     h("div",{class: "lock-logo", "aria-hidden": "true"}, "🔒"),
     h("h2",{}, "نسيم مقفول"),
-    h("p",{class: "att-note"}, "اكتب الرقم السري" + (c.cred ? " أو افتح بالبصمة." : ".")),
+    h("p",{class: "att-note"}, c.cred ? "حط صباعك على الحساس، أو اكتب الرقم الاحتياطي." : "اكتب الرقم السري."),
     pin, h("button",{class: "btn primary", onclick: tryPin}, "افتح"), bioBtn, msg,
     h("button",{class: "link-btn", style: "margin-top:14px", onclick: forgotPin}, "نسيت الرقم؟")));
   v.hidden = false;
-  setTimeout(() => pin.focus(), 50);
+  if (c.cred) setTimeout(() => { bioCheck(c.cred).then(unlockApp).catch(() => { msg.textContent = "اضغط ☝️ افتح بالبصمة، أو اكتب الرقم الاحتياطي."; }); }, 300);
+  else setTimeout(() => pin.focus(), 50);
 }
 async function forgotPin(){
   if (!confirm("مفيش طريقة تفتح نسيم من غير الرقم، وده مقصود عشان محدش غيرك يقدر.\nالحل: تمسح نسيم من الجهاز ده وترجّع بياناتك من نسختك الاحتياطية المتشفرة.\nأكمّل؟")) return;
@@ -5521,9 +5523,37 @@ document.addEventListener("visibilitychange", () => {
   if (document.hidden){ hiddenAt = Date.now(); if (!c.after) lockNow(); }          // "فوراً": covers the app-switcher preview too
   else if (!locked && Date.now() - hiddenAt >= (c.after || 0) * 60000) lockNow();
 });
+/* One step: backup PIN + fingerprint together. The PIN is only the fallback if the sensor fails. */
+async function openBioSetup(){
+  const ok = await bioAvailable();
+  const p1 = h("input",{class: "voice-select", type: "password", inputmode: "numeric", maxlength: "6", placeholder: "رقم احتياطي (4 لـ 6 أرقام)", dir: "ltr"});
+  const p2 = h("input",{class: "voice-select", type: "password", inputmode: "numeric", maxlength: "6", placeholder: "اكتبه تاني", dir: "ltr"});
+  const st = h("div",{class: "att-note", "aria-live": "polite"});
+  const go = async () => {
+    const c0 = lockCfg();
+    if (!c0){
+      if (!PIN_RE.test(p1.value)){ st.textContent = "الرقم الاحتياطي لازم يكون من 4 لـ 6 أرقام."; return; }
+      if (p1.value !== p2.value){ st.textContent = "الرقمين مش زي بعض."; return; }
+      if (/^(\d)\1+$/.test(p1.value) || "0123456789".includes(p1.value) || "9876543210".includes(p1.value)){ st.textContent = "اختار رقم أصعب من كده."; return; }
+    }
+    st.textContent = "حط صباعك على الحساس…";
+    let cred = null;
+    try{ cred = await bioRegister(); }catch(e){ st.textContent = "البصمة ما اتسجلتش. جرّب تاني، واتأكد إن قفل الشاشة بالبصمة شغال على الموبايل."; return; }
+    if (c0) setLockCfg({...c0, cred});
+    else { const salt = b64(crypto.getRandomValues(new Uint8Array(16))); setLockCfg({salt, hash: await pinHash(p1.value, salt), len: p1.value.length, after: 1, cred}); }
+    toast("تمام ✓ نسيم هيفتح ببصمتك من دلوقتي."); closeSheet(); render();
+  };
+  const has = lockCfg();
+  sheet.replaceChildren(h("h2",{id: "sheetTitle"}, "☝️ افتح نسيم ببصمتك"),
+    ok ? h("p",{}, "كل ما تفتح نسيم هيطلب بصمتك بس. " + (has ? "" : "الرقم الاحتياطي بتستخدمه لو الحساس معلّق أو إيدك مبلولة.")) : h("p",{}, "الموبايل ده مش بيدعم البصمة في المتصفح. ممكن تقفل نسيم برقم سري من الإعدادات."),
+    ok && !has ? h("div",{class: "row"}, p1, p2) : null, st,
+    h("div",{class: "row"}, ok ? h("button",{class: "btn primary", onclick: go}, "فعّل البصمة") : null, h("button",{class: "btn ghost", onclick: closeSheet}, "بعدين")));
+  sheetBack.hidden = false;
+}
 function lockSettings(){
   const box = h("div",{class: "pref"}, h("div",{class: "pref-label"}, "🔒 قفل نسيم"));
   const c = lockCfg(), status = h("div",{class: "att-note"});
+  if (!c || !c.cred){ const qb = h("button",{class: "btn primary", hidden: true, onclick: openBioSetup}, "☝️ افتح نسيم ببصمتك"); bioAvailable().then(ok => { qb.hidden = !ok; }); box.append(h("div",{class: "row"}, qb)); }
   if (!c){
     const p1 = h("input",{class: "voice-select", type: "password", inputmode: "numeric", maxlength: "6", placeholder: "رقم سري (4 لـ 6 أرقام)", dir: "ltr"});
     const p2 = h("input",{class: "voice-select", type: "password", inputmode: "numeric", maxlength: "6", placeholder: "اكتبه تاني", dir: "ltr"});
