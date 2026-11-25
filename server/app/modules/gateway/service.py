@@ -26,6 +26,8 @@ from app.modules.orchestrator.schemas import ErrorCode, ProcessingError
 from app.modules.privacy.pseudonymizer import Pseudonymizer
 from app.shared.api import AppError
 
+from app.modules.ops.service import bump
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_VOICE = {"ar": "ar-EG-SalmaNeural", "en": "en-US-JennyNeural"}
@@ -89,11 +91,14 @@ class GatewayService:
             except LLMOutputError as exc:
                 # The model answered but not in JSON: the app re-asks with a repair note.
                 logger.info("gateway %s: %s returned invalid JSON", request_id, name)
+                await bump(self._session, "ai", f"{name}:invalid")
                 return self._error(request_id, "llm_output_invalid", str(exc), True)
             except LLMUnavailableError as exc:
                 logger.warning("gateway %s: %s unavailable (%s), trying next", request_id, name, exc)
+                await bump(self._session, "ai", f"{name}:fail", str(exc))
                 last = exc
                 continue
+            await bump(self._session, "ai", f"{name}:ok" + (":nosearch" if isinstance(data, dict) and data.get("_no_search") else ""))
             return CompleteResponse(
                 request_id=request_id, status="success", data=vault.unmask(data),
                 provider=name,  # type: ignore[arg-type]

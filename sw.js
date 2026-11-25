@@ -1,6 +1,6 @@
 /* Offline shell. The app itself is network-first so updates arrive on the next open;
    fonts and the file-reading libraries are cached after first use. AI calls are never cached. */
-const CACHE = "nasem-v62";
+const CACHE = "nasem-v63";
 const SHELL = ["./", "./index.html", "./runtime.js", "./config.json", "./manifest.webmanifest", "./icon-192.png", "./icon-512.png"];
 
 self.addEventListener("install", (e) => {
@@ -59,23 +59,24 @@ function deviceKey() {
 const fromB64 = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
 self.addEventListener("push", (e) => {
   e.waitUntil((async () => {
-    let title = "نسيم", body = "عندك تذكير", tag;
+    let title = "نسيم", body = "عندك تذكير", tag, url = "./";
     try {
       const d = e.data.json(); tag = d.id;
       if (d.p){ title = d.p.t || title; body = d.p.b || ""; throw "plain"; }   // family alerts: generic text, no decryption needed
       const key = await deviceKey();
       if (key) {
         const pt = await crypto.subtle.decrypt({ name: "AES-GCM", iv: fromB64(d.iv) }, key, fromB64(d.c));
-        const o = JSON.parse(new TextDecoder().decode(pt)); title = o.t || title; body = o.b || "";
+        const o = JSON.parse(new TextDecoder().decode(pt)); title = o.t || title; body = o.b || ""; if (typeof o.u === "string" && o.u.startsWith("./")) url = o.u;
       }
     } catch (err) {}
-    await self.registration.showNotification(title, { body, tag, icon: "./icon-192.png", badge: "./icon-192.png", dir: "rtl", lang: "ar", data: { url: "./" } });
+    await self.registration.showNotification(title, { body, tag, icon: "./icon-192.png", badge: "./icon-192.png", dir: "rtl", lang: "ar", data: { url } });
   })());
 });
 self.addEventListener("notificationclick", (e) => {
   e.notification.close();
+  const url = (e.notification.data && e.notification.data.url) || "./";
   e.waitUntil(self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((ws) => {
-    for (const w of ws) if ("focus" in w) return w.focus();
-    return self.clients.openWindow("./");
+    for (const w of ws) if ("focus" in w) { if (url !== "./") w.postMessage({ nasemOpen: url }); return w.focus(); }
+    return self.clients.openWindow(url);
   }));
 });

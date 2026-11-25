@@ -9,9 +9,10 @@ from app.modules.access.models import ActivationRequest, Device
 from app.modules.family.models import FamilyEvent, FamilyItem, FamilyLink, FamilyRequest
 from app.modules.backup.models import UserBackup
 from app.modules.scheduler.models import WakeSlot
+from app.modules.ops.models import OpsEvent
 from app.modules.commitments.models import Commitment
 from app.modules.events.models import EventContext
 from app.modules.privacy.keys import UserKey
 from app.modules.memory.models import Memory, MemoryEmbedding, MemoryRevision
 
-__all__ = ["Base", "WakeSlot", "UserBackup", "FamilyEvent", "FamilyItem", "FamilyLink", "FamilyRequest", "ActivationRequest", "Device", "PushSubscription", "ScheduledPush", "GatewayUsage", "UserKey", "RefreshToken", "User", "PendingAction", "Commitment", "EventContext", "Memory", "MemoryEmbedding", "MemoryRevision"]
+__all__ = ["Base", "WakeSlot", "OpsEvent", "UserBackup", "FamilyEvent", "FamilyItem", "FamilyLink", "FamilyRequest", "ActivationRequest", "Device", "PushSubscription", "ScheduledPush", "GatewayUsage", "UserKey", "RefreshToken", "User", "PendingAction", "Commitment", "EventContext", "Memory", "MemoryEmbedding", "MemoryRevision"]

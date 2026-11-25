@@ -42,7 +42,7 @@ button.primary{background:var(--brand);color:#fff}button.bad{background:var(--ba
   </section>
   <section id="app" hidden>
     <div class="stats" id="stats"></div>
-    <div class="tabs"><button data-t="pending" aria-pressed="true">الطلبات</button><button data-t="users" aria-pressed="false">المستخدمين</button><button data-t="history" aria-pressed="false">المرفوضة</button>
+    <div class="tabs"><button data-t="health" aria-pressed="false">🩺 صحة نسيم</button><button data-t="pending" aria-pressed="true">الطلبات</button><button data-t="users" aria-pressed="false">المستخدمين</button><button data-t="history" aria-pressed="false">المرفوضة</button>
       <span class="grow"></span><button id="refresh">تحديث</button><button id="logout">خروج</button></div>
     <div id="list"></div>
   </section>
@@ -79,9 +79,37 @@ async function load(){
     const s = await api("/v1/admin/stats");
     $("#stats").innerHTML = [["pending","طلبات مستنية"],["users","مستخدمين"],["active_devices","أجهزة شغالة"],["requests_today","طلبات ذكاء النهاردة"]]
       .map(([k, l]) => `<div class="stat"><b>${s[k]}</b><span>${l}</span></div>`).join("");
+    if (tab === "health") return renderHealth(await api("/v1/admin/health"));
     if (tab === "users") return renderUsers(await api("/v1/admin/users"));
     renderRequests(await api("/v1/admin/requests?status=" + (tab === "history" ? "rejected" : "pending")));
   }catch(e){ if (e.message !== "login") $("#list").innerHTML = `<div class="card err">${esc(e.message)}</div>`; }
+}
+const AI_NAMES = {gemini: "Gemini (جوجل)", groq: "Groq", anthropic: "Claude", openai: "ChatGPT"};
+function renderHealth(h){
+  const t = h.today || {}, w = h.week || {}, n = k => t[k] || 0, wk = k => w[k] || 0;
+  const light = (ok, warn) => ok ? "🟢" : warn ? "🟡" : "🔴";
+  const prov = Object.keys(AI_NAMES).filter(p => h.providers[p]);
+  const okAll = prov.reduce((a, p) => a + n("ai:" + p + ":ok") + n("ai:" + p + ":ok:nosearch"), 0), failAll = prov.reduce((a, p) => a + n("ai:" + p + ":fail"), 0);
+  const aiRows = prov.map(p => {
+    const ok = n("ai:" + p + ":ok") + n("ai:" + p + ":ok:nosearch"), ns = n("ai:" + p + ":ok:nosearch"), fail = n("ai:" + p + ":fail"), bad = n("ai:" + p + ":invalid");
+    return `<div class="row" style="justify-content:space-between"><span>${light(fail === 0 || ok > fail, ok > 0)} <b>${AI_NAMES[p]}</b> <span class="sub">${h.order.indexOf(p) === 0 ? "الأساسي" : "احتياطي"}</span></span>
+      <span class="sub">النهاردة: ${ok} نجح${ns ? ` (${ns} من غير بحث)` : ""} • ${fail} فشل${bad ? ` • ${bad} رد مش مفهوم` : ""} • الأسبوع: ${wk("ai:" + p + ":ok") + wk("ai:" + p + ":ok:nosearch")} نجح</span></div>`;
+  }).join("");
+  const missing = Object.keys(AI_NAMES).filter(p => !h.providers[p]).map(p => AI_NAMES[p]).join("، ");
+  const P = h.push, lastTick = (h.last || {})["tick:run"];
+  const tickAge = lastTick ? (Date.now() - new Date(lastTick)) / 60000 : null;
+  const notes = (h.notes || []).map(x => `<div class="sub">• <b>${esc(x.key.replace(/^ai:/, "").replace(":fail", " فشل"))}</b> ${fmt(x.at)}: <span dir="ltr">${esc(x.note)}</span></div>`).join("");
+  $("#list").innerHTML = `
+  <div class="card"><h2 style="margin-top:0">${light(failAll === 0 || okAll >= failAll, okAll > 0)} الذكاء</h2>
+    <div class="sub">النهاردة ${okAll} رد ناجح و${failAll} محاولة فشلت واتنقلت للي بعدها. ${failAll > okAll ? "⚠️ الفشل أكتر من النجاح: غالباً الحد المجاني خلص أو جوجل زحمة." : ""}</div>${aiRows}
+    ${missing ? `<div class="sub" style="margin-top:6px">مش متوصل: ${esc(missing)}</div>` : ""}</div>
+  <div class="card"><h2 style="margin-top:0">${light(P.configured && P.qstash && (tickAge == null || tickAge < 90), P.configured)} التذكيرات والإشعارات</h2>
+    <div class="sub">موبايلات مفعّل عليها الإشعارات: <b>${P.subscriptions}</b> • تذكيرات مستنية: <b>${P.pending}</b>${P.next_at ? ` • أقرب واحد ${fmt(P.next_at)}` : ""}</div>
+    <div class="sub">النهاردة اتبعت <b>${n("push:sent")}</b> إشعار${n("push:failed") ? ` • فشل ${n("push:failed")}` : ""}${n("push:no_device") ? ` • ⚠️ ${n("push:no_device")} تذكير جه ميعاده والموبايل مش مفعّل عليه الإشعارات` : ""}</div>
+    <div class="sub">الصحيان التلقائي (QStash): ${P.qstash ? "متوصل ✓" : "❌ مش متوصل"} • مواعيد صحيان محجوزة: ${P.wake_slots} • آخر تشغيل: ${lastTick ? fmt(lastTick) : "لسه"}</div>
+    ${P.subscriptions === 0 ? `<div class="sub" style="color:var(--bad)">مفيش ولا موبايل مفعّل عليه الإشعارات. من نسيم: ⚙️ الإعدادات ← التذكيرات ← "جرّب تذكير بعد دقيقتين".</div>` : ""}</div>
+  ${notes ? `<div class="card"><h2 style="margin-top:0">آخر الأخطاء النهاردة</h2>${notes}</div>` : ""}
+  <div class="sub">آخر تحديث للوحة ${fmt(h.now)} — العدادات أرقام بس، من غير أي كلام من المستخدمين.</div>`;
 }
 function renderRequests(rows){
   if (!rows.length){ $("#list").innerHTML = `<div class="card sub">${tab === "history" ? "مفيش طلبات مرفوضة." : "مفيش طلبات جديدة."}</div>`; return; }

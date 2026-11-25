@@ -533,6 +533,7 @@ function repairState(){
   S.crafts = arr(S.crafts).filter(c => c && c.name).map(c => ({...c, id: c.id || uid(), name: str(c.name), trade: str(c.trade) || "تاني", jobs: arr(c.jobs).filter(j => j && j.at).map(j => ({...j, what: str(j.what) || "شغلانة"}))}));
   S.spend = arr(S.spend).filter(e => e && e.at && Number.isFinite(+e.amount)).map(e => ({...e, amount: +e.amount}));
   S.projects = arr(S.projects).filter(x => x && typeof x === "object").map(x => ({...x, items: arr(x.items)}));
+  S.siteReports = arr(S.siteReports).filter(x => x && typeof x === "object" && x.id && x.site).map(x => ({...x, data: x.data && typeof x.data === "object" ? x.data : {}, state: "ready"}));
   S.studies = arr(S.studies).filter(x => x && typeof x === "object" && x.id).map(x => x.state === "loading" ? {...x, state: x.data ? "ready" : "failed"} : x);
   S.memories = arr(S.memories).filter(m => m && typeof m === "object");
   S.reports = arr(S.reports).filter(r => r && r.report && typeof r.report === "object" && r.id).map(r => ({...r, sources: arr(r.sources), report: {...r.report, key_numbers: arr(r.report.key_numbers), sections: arr(r.report.sections), what_to_do: arr(r.report.what_to_do), watch_out: arr(r.report.watch_out), follow_ups: arr(r.report.follow_ups), sources: arr(r.report.sources), bottom_line: String(r.report.bottom_line || ""), title: String(r.report.title || "")}}));
@@ -1366,7 +1367,7 @@ async function send(text, source = "text"){
   if (text.length > MAX_INPUT){ toast("الرسالة أطول من 4000 حرف."); return; }
   // Simple things are answered on the phone itself: instant, private, offline, and they don't spend the AI quota.
   if (!EMERGENCY_RE.test(text)){
-    const lr = localHelp(text) || localSearch(text) || localBuild(text) || localFeas(text) || localBooks(text) || localSpend(text) || localAnswer(text) || marketAlertLocal(text) || (isMarketText(text) ? await marketAnswer(text) : null);
+    const lr = localHelp(text) || localBrief(text) || localSiteReport(text) || localSearch(text) || localBuild(text) || localFeas(text) || localBooks(text) || localSpend(text) || localAnswer(text) || marketAlertLocal(text) || (isMarketText(text) ? await marketAnswer(text) : null);
     const local = lr && typeof lr === "object" ? lr.text : lr;
     if (local){
       S.messages.push({id:uid(), role:"user", text, at:nowISO(), source}); noteMessage(text, source);
@@ -1625,6 +1626,7 @@ function renderChat(){
       : l.url === "#say" ? h("button",{class:"fb", onclick:openSayAll}, l.label)
       : /^#research:/.test(l.url) ? h("button",{class:"fb", onclick:() => startResearch(l.url.slice(10))}, l.label)
       : /^#build:/.test(l.url) ? h("button",{class:"fb", onclick:() => openBuild(l.url.slice(7))}, l.label)
+      : /^#site:/.test(l.url) ? h("button",{class:"fb", onclick:() => openSiteReport(l.url.slice(6))}, l.label)
       : l.url === "#feas:suggest" ? h("button",{class:"fb", onclick:() => openFeasHome("suggest")}, l.label)
       : /^#feas:/.test(l.url) ? h("button",{class:"fb", onclick:() => openFeas(l.url.slice(6))}, l.label)
       : h("a",{class:"fb", href:l.url, target: /^tel:/.test(l.url) ? null : "_blank", rel:"noopener"}, l.label))));
@@ -1748,6 +1750,7 @@ function renderTasks(){
   const p = document.getElementById("panel-tasks"); p.replaceChildren();
   let extra = 0;
   const medsBox = medsSection(); if (medsBox){ p.append(medsBox); extra++; }
+  p.append(safeSec(siteSection, "تقارير المواقع", "sec-sites"));
   const revBox = decisionReviewSection(); if (revBox){ p.append(revBox); extra++; }
   const waitingOn = S.promises.filter(x => x.direction === "they_promised" && x.status === "open");
   const mine = S.promises.filter(x => x.direction === "i_promised" && x.status === "open");
@@ -1858,6 +1861,7 @@ function openSettings(){
     h("h2",{id:"sheetTitle"}, "الخصوصية والإعدادات"),
     aiSettings(),
     lockSettings(),
+    briefSettings(),
     pushSettings(),
     citySettings(),
     voiceSettings(),
@@ -2670,9 +2674,12 @@ function cloudVoiceSettings(){
 
 /* ---------------- identity: "تعرّف على نسيم" ---------------- */
 const APP = {
-  name: "نسيم", nameLatin: "NASEM AI", version: "إصدار 5.5 (تطبيق)",
+  name: "نسيم", nameLatin: "NASEM AI", version: "إصدار 5.6 (تطبيق)",
   updated: "2026-11-25",
   changes: [
+    "☀️ ملخص الصبح: إشعار كل يوم في ميعادك، تفتحه تسمع مواعيدك والمتأخر والدوا والأقساط والدولار",
+    "📋 تقرير الموقع اليومي بالصوت: \"تقرير موقع QNB: …\" يطلع تقرير منظم PDF / Excel / واتساب، وملخص أسبوع لكل موقع",
+    "🔔 زرار \"جرّب تذكير بعد دقيقتين\" عشان تتأكد إن الإشعارات بتوصل",
     "🧠 مصدر ذكاء تاني (Groq مجاني) بيرد على طول لو Gemini زحمة أو خلص حده اليومي",
     "🔁 لو الذكاء زحمة لحظياً، نسيم بيعيد المحاولة لوحده قبل ما يقولك",
     "🔊 لو الصوت المصري اتأخر، نسيم بيكمّل بصوت الموبايل على طول (في المكالمة كمان)",
@@ -2743,6 +2750,15 @@ function openAbout(){
   sheetBack.hidden = false;
 }
 document.getElementById("aboutBtn").addEventListener("click", openAbout);
+/* Deep links from notifications: "./?brief=1" opens and reads the morning brief. */
+function openFromLink(u){
+  if (!/brief=1/.test(String(u || ""))) return;
+  const go = () => { const locked = document.querySelector(".lock-view") && !document.querySelector(".lock-view").hidden;
+    if (!ready || locked || document.getElementById("gate")) return setTimeout(go, 700); showBrief(true); };
+  go();
+}
+try{ if (/brief=1/.test(location.search)){ history.replaceState(null, "", location.pathname); openFromLink("?brief=1"); } }catch(e){}
+try{ navigator.serviceWorker && navigator.serviceWorker.addEventListener("message", e => { if (e.data && e.data.nasemOpen) openFromLink(e.data.nasemOpen); }); }catch(e){}
 try{ const vt = document.getElementById("verTag"); vt.textContent = "v" + (APP.version.match(/([0-9.]+)/) || [])[1]; vt.title = "الإصدار وآخر تحديث"; }catch(e){}
 setTimeout(() => { try{ const v = (APP.version.match(/([0-9.]+)/) || [])[1], last = localStorage.getItem("nasem-run-ver");
   if (last && last !== v){ const t = h("div",{class:"update-bar", role:"status"}, `نسيم اتحدّث لإصدار ${v} ✨`, h("button",{onclick: () => { t.remove(); openAbout(); }}, "شوف الجديد"), h("button",{onclick: () => t.remove(), "aria-label":"اقفل"}, "✕")); document.body.appendChild(t); setTimeout(() => t.remove(), 15000); }
@@ -3573,6 +3589,9 @@ async function handleShared(){
 /* Everything due in the next 30 days, built on the phone. Sent to the server encrypted (see runtime). */
 function reminderItems(){
   const out = [], now = Date.now(), horizon = now + 30 * 864e5;
+  if (briefCfg().on){ const [bh, bm] = (briefCfg().time || "07:00").split(":").map(Number);
+    for (let d = 0; d < 7; d++){ const dt = new Date(); dt.setDate(dt.getDate() + d); dt.setHours(bh, bm, 0, 0); if (dt.getTime() > now) out.push({id: "brief-" + localISO(dt).slice(0, 10), at: dt.getTime(), title: "☀️ ملخص يومك جاهز", body: "اضغط تسمع مواعيدك وأقساطك والدولار في دقيقة", u: "./?brief=1"}); } }
+  if (S.pushTest && S.pushTest.at > now) out.push({id: "test-" + S.pushTest.at, at: S.pushTest.at, title: "🔔 تجربة تذكير نسيم", body: "وصلك؟ يبقى التذكيرات شغالة حتى والتطبيق مقفول ✓"});
   for (const c of S.commitments) if (c.status === "pending" && c.approved_at && c.due){
     let d = c.due;
     for (let k = 0; k < (c.repeat ? 30 : 1) && d; k++){
@@ -3616,6 +3635,15 @@ function pushSettings(){
         openSettings();
       }catch(x){ status.textContent = PUSH_ERR[x && x.code] || "ما نفعش دلوقتي. جرّب تاني."; }
     }}, t))), status,
+    h("button",{class:"btn ghost", onclick: async () => {
+      status.textContent = "بجهز التجربة…";
+      try{
+        if (!A.push.enabled()) await A.push.enable();
+        S.pushTest = {at: Date.now() + 2 * 60e3}; store.save();
+        await A.push.sync(reminderItems());
+        status.textContent = `تمام ✓ اقفل نسيم خالص دلوقتي. المفروض يوصلك إشعار "تجربة تذكير نسيم" الساعة ${fmtTime(new Date(S.pushTest.at).toISOString())}. لو ما وصلش خلال 3 دقايق، قولّي.`;
+      }catch(x){ status.textContent = PUSH_ERR[x && x.code] || "ما نفعش دلوقتي. جرّب تاني."; }
+    }}, "🔔 جرّب تذكير بعد دقيقتين"),
     h("div",{class:"att-note"}, "السيرفر بيعرف المعاد بس. نص التذكير متشفّر على موبايلك، وما حدش غيرك يقدر يقراه."));
 }
 
@@ -5273,6 +5301,170 @@ function studiesSection(){
       h("b",{}, st.data ? st.data.title : st.idea), h("div",{class: "sub"}, M ? `${FEAS_VERDICT[M.verdict][0]} • استثمار ${fmtMoney(M.invest)} • ربح شهري ${fmtMoney(M.steady)} • استرداد ${M.payback ? fmtN(M.payback) + " شهر" : "+5 سنين"}` : st.state === "loading" ? "⏳ جاري الدراسة…" : "ما كملتش — افتحها وجرّب تاني")));
   }
   if (!(S.studies || []).length) box.append(h("div",{class: "att-note", style: "margin:4px"}, "قول \"دراسة جدوى لمغسلة عربيات في المنصورة برأس مال 300 ألف\" أو \"اقترح عليّ مشروع بـ 200 ألف\"."));
+  return box;
+}
+
+/* ================= ☀️ ملخص الصبح: يومك في دقيقة، مكتوب ومسموع، وبيوصلك إشعار في ميعاده ================= */
+const briefCfg = () => S.settings.brief || {on: false, time: "07:00"};
+async function morningBrief(){
+  const now = new Date(), t0 = startOfToday().getTime(), t1 = t0 + 864e5;
+  const parts = [];
+  const hr = now.getHours();
+  parts.push(`${hr < 12 ? "صباح الخير" : hr < 17 ? "مساء النور" : "مساء الخير"}${S.profile && S.profile.name ? " يا " + S.profile.name : ""} ☀️ النهاردة ${new Intl.DateTimeFormat("ar-EG", {weekday: "long", day: "numeric", month: "long"}).format(now)}.`);
+  const act = S.commitments.filter(c => c.status === "pending" && c.approved_at && c.due);
+  const today = act.filter(c => { const t = new Date(c.due).getTime(); return t >= t0 && t < t1; }).sort((a, b) => new Date(a.due) - new Date(b.due));
+  const late = act.filter(c => new Date(c.due).getTime() < Math.min(t0, now.getTime()) && !c.repeat);
+  if (today.length) parts.push(`📅 عندك ${fmtN(today.length)} ${today.length === 1 ? "التزام" : "التزامات"}: ` + today.slice(0, 5).map(c => `${c.title} ${fmtTime(c.due)}`).join("، ") + (today.length > 5 ? "، وغيرهم." : "."));
+  else parts.push("📅 مفيش التزامات متسجلة النهاردة.");
+  if (late.length) parts.push(`⏰ فيه ${fmtN(late.length)} حاجة فات ميعادها ولسه ما خلصتش: ${late.slice(0, 3).map(c => c.title).join("، ")}.`);
+  try{ const meds = activeMeds(); const doses = meds.reduce((a, m) => a + m.times.length, 0); if (doses) parts.push(`💊 ${fmtN(doses)} ${doses === 1 ? "جرعة" : "جرعات"} دوا النهاردة.`); }catch(e){}
+  if (S.settings.sensitive){
+    const money = [];
+    for (const g of S.ledger.gam3eyas || []){ const st = gamStatus(g); if (st.state !== "running") continue; const d = gamMonthDate(g, st.i), dd = Math.round((new Date(d.toDateString()) - startOfToday()) / 864e5); const me = gamMeKey(g);
+      if (me && !gamPaidRead(g, st.i)[me] && dd >= 0 && dd <= 3) money.push(`قسط ${g.name} ${dd === 0 ? "النهاردة" : `بعد ${fmtN(dd)} يوم`}`);
+      if (g.role === "organizer") for (const p of g.people || []){ const pd = gamPayDate(g, p, g.people.indexOf(p)); if (pd.toDateString() === now.toDateString()) money.push(`النهاردة ميعاد قبض ${p.isMe ? "إنت" : p.name} من ${g.name}`); } }
+    for (const a of S.accounts || []) if (a.promise && new Date(a.promise.at).toDateString() === now.toDateString() && accBalance(a) > 0.5) money.push(`${a.name} وعد يدفع النهاردة ${fmtMoney(accBalance(a))}`);
+    if (money.length) parts.push("💵 " + money.slice(0, 4).join("، ") + ".");
+  }
+  try{ const m = await refreshMarket(false); if (m && m.fx && m.fx.USD) parts.push(`📈 الدولار في البنك المركزي ${fx2(m.fx.USD)} جنيه${trend("USD")}${m.g24 ? `، وعيار 21 حوالي ${fx0(goldK(m.g24, 21))} (تقديري)` : ""}.`); }catch(e){}
+  try{ const warn = insights().filter(x => x.level === "warn").slice(0, 1); if (warn.length) parts.push("⚠️ " + warn[0].text); }catch(e){}
+  parts.push(today.length || late.length ? "يومك سعيد، وأنا هفكّرك في المواعيد ✓" : "يوم هادي، استغله في حاجة بتحبها 🌷");
+  return parts.join("\n");
+}
+async function showBrief(spoken){
+  const text = await morningBrief();
+  switchTab("chat");
+  S.messages.push({id: uid(), role: "agent", text, at: nowISO(), local: true, brief: true});
+  render(); scrollDown(); store.save();
+  if (spoken) speak(text, true);
+}
+function localBrief(text){
+  const n = arNorm(clean(text));
+  if (!/(ملخص (الصبح|اليوم|يومي|النهارده)|لخصلي (يومي|النهارده)|ايه اللي عليا النهارده|يومي فيه ايه|صباح الخير يا نسيم)/.test(n)) return null;
+  setTimeout(() => showBrief(true), 30);
+  return "حاضر، ده ملخص يومك 👇";
+}
+function briefSettings(){
+  const c = briefCfg();
+  const time = h("input",{class: "voice-select", type: "time", value: c.time || "07:00", dir: "ltr", style: "max-width:130px"});
+  time.onchange = () => { S.settings.brief = {...briefCfg(), time: time.value || "07:00"}; store.save(); schedulePushSync(); toast("اتظبط ✓"); };
+  return h("div",{class: "pref"}, h("div",{class: "pref-label"}, "☀️ ملخص الصبح"),
+    h("div",{class: "att-note"}, "كل يوم في الميعاد ده يوصلك إشعار، تفتحه تسمع: مواعيدك، المتأخر، الدوا، الأقساط، الدولار والدهب، وأهم تنبيه."),
+    h("div",{class: "seg"}, [[true, "شغال"], [false, "مقفول"]].map(([v, t]) => h("button",{"aria-pressed": String(!!c.on === v), onclick: () => { S.settings.brief = {...briefCfg(), on: v}; store.save(); schedulePushSync(); openSettings();
+      if (v && window.NASEM_APP && window.NASEM_APP.push && !window.NASEM_APP.push.enabled()) toast("فعّل \"تذكيرات توصلك والتطبيق مقفول\" تحت عشان يوصلك الإشعار."); }}, t))),
+    h("div",{class: "row", style: "align-items:center"}, h("span",{class: "att-note"}, "الميعاد"), time, h("button",{class: "btn ghost", onclick: () => { closeSheet(); showBrief(true); }}, "▶️ اسمعه دلوقتي")));
+}
+
+/* ================= 📋 تقرير الموقع اليومي: تقوله بصوتك، يطلع تقرير منظم PDF / Excel / واتساب ================= */
+function parseSiteReport(text){
+  const t = String(text || "").trim(), n = arNorm(t);
+  const m = n.match(/^(?:(?:اعمل|اكتب|سجل)(?:لي)?\s+)?تقرير\s+(?:(?:ال)?يوم(?:ي)?\s+)?(?:ل|عن\s+|في\s+)?(?:ال)?موقع\s+/);
+  if (!m) return null;
+  const rest = t.slice(m[0].length).trim();   // arNorm keeps the length for these letters, so offsets match
+  let site, body;
+  const sep = rest.match(/\s*[:\-–،,]\s*/);
+  if (sep && sep.index > 0 && sep.index <= 40){ site = rest.slice(0, sep.index); body = rest.slice(sep.index + sep[0].length); }
+  else {
+    const w = rest.split(/\s+/), stop = /^(\d|[٠-٩]|النهارده|النهاردة|خلصنا|خلص|فيه|في|عندنا|ركبنا|اشتغلنا|الشغل|كان|كانوا|احنا|مفيش|النهار|انهارده)/;
+    let k = 1; if (w[1] && !stop.test(arNorm(w[1])) && w[1].length <= 12 && w.length > 3) k = 2;
+    site = w.slice(0, k).join(" "); body = w.slice(k).join(" ");
+  }
+  site = site.replace(/^(ال)?موقع\s+/, "").trim().slice(0, 40); body = body.trim();
+  return site && body.length >= 8 ? {site, body} : null;
+}
+function siteLocalExtract(body){
+  const nn = arNorm(normNums(body));
+  const num = re => { const x = nn.match(re); return x ? +x[1] : null; };
+  return {technicians: num(/(\d+)\s*(?:فني|فنيين|عامل|عمال|صنايعي)/), engineers: num(/(\d+)\s*(?:مهندس|مهندسين)/),
+    done: [], in_progress: [], issues: [], needs: [], tomorrow: [], summary: body.slice(0, 300), progress: num(/(\d+)\s*%/)};
+}
+function localSiteReport(text){
+  const x = parseSiteReport(text); if (!x) return null;
+  const r = {id: uid(), site: x.site, date: localISO(new Date()).slice(0, 10), raw: x.body, data: siteLocalExtract(x.body), state: "loading", at: nowISO()};
+  S.siteReports = S.siteReports || []; S.siteReports.unshift(r); store.save();
+  setTimeout(() => siteAI(r), 30);
+  return {text: `اتسجل تقرير موقع ${x.site} ليوم ${fmtDay(r.date + "T12:00")}. بنظّمه دلوقتي في بنود (اللي خلص، الشغال، المشاكل، المطلوب، بكره).`, links: [{label: "📋 افتح التقرير", url: "#site:" + r.id}]};
+}
+async function siteAI(r, btn){
+  const sample = await getSample(); r.state = "loading";
+  if (!sample){ r.state = "ready"; store.save(); return; }
+  if (btn){ btn.disabled = true; btn.textContent = "بنظّم…"; }
+  const prompt = `You are a construction/installation site planning assistant in Egypt. Turn this site engineer's spoken daily update (Egyptian Arabic, may be messy) into a structured daily report. Do NOT invent anything that was not said.
+Site: ${r.site}
+Update: """${String(r.raw).slice(0, 2500)}"""
+Reply with ONLY JSON (Arabic text):
+{"technicians":<number or null>,"engineers":<number or null>,"done":["<finished item>"],"in_progress":[{"item":"<item>","pct":<0-100 or null>}],"issues":[{"issue":"<problem>","owner":"<who should act, if said>","action":"<next action>"}],"needs":[{"item":"<material/tool/person needed>","qty":"<quantity if said>"}],"tomorrow":["<plan for tomorrow>"],"progress":<overall % if said or null>,"summary":"<one sentence>"}`;
+  try{
+    const raw = await sample.json(prompt, {modelTier: "quick", cache: false});
+    const arr = (v, n, f) => Array.isArray(v) ? v.slice(0, n).map(f).filter(Boolean) : [];
+    const str = v => typeof v === "string" ? v.trim().slice(0, 200) : "";
+    r.data = {technicians: toNumber(raw.technicians) || r.data.technicians || null, engineers: toNumber(raw.engineers) || r.data.engineers || null,
+      done: arr(raw.done, 15, str), in_progress: arr(raw.in_progress, 15, x => x && str(x.item) ? {item: str(x.item), pct: x.pct == null ? null : Math.max(0, Math.min(100, toNumber(x.pct) || 0))} : null),
+      issues: arr(raw.issues, 10, x => x && str(x.issue) ? {issue: str(x.issue), owner: str(x.owner), action: str(x.action)} : null),
+      needs: arr(raw.needs, 15, x => x && str(x.item) ? {item: str(x.item), qty: str(x.qty)} : null),
+      tomorrow: arr(raw.tomorrow, 10, str), progress: raw.progress == null ? r.data.progress : Math.max(0, Math.min(100, toNumber(raw.progress) || 0)), summary: str(raw.summary) || r.data.summary};
+    r.state = "ready"; r.ai = true;
+  }catch(e){ console.warn(e); r.state = "ready"; r.ai = false; }
+  finally{ if (btn){ btn.disabled = false; btn.textContent = "🔁 نظّمه تاني"; } store.save(); render(); if (siteOpenId === r.id) openSiteReport(r.id); }
+}
+function siteText(r){
+  const d = r.data || {}, L = [`📋 تقرير موقع ${r.site} — ${fmtDay(r.date + "T12:00")}`];
+  if (d.technicians || d.engineers) L.push(`👷 العمالة: ${[d.engineers ? `${fmtN(d.engineers)} مهندس` : null, d.technicians ? `${fmtN(d.technicians)} فني` : null].filter(Boolean).join(" + ")}`);
+  if (d.progress != null) L.push(`📊 نسبة الإنجاز: ${fmtN(d.progress)}%`);
+  if (d.done && d.done.length) L.push("", "✅ اللي خلص:", ...d.done.map(x => "- " + x));
+  if (d.in_progress && d.in_progress.length) L.push("", "🔧 شغال فيه:", ...d.in_progress.map(x => `- ${x.item}${x.pct != null ? ` (${fmtN(x.pct)}%)` : ""}`));
+  if (d.issues && d.issues.length) L.push("", "⚠️ المشاكل:", ...d.issues.map(x => `- ${x.issue}${x.owner ? ` — المسؤول: ${x.owner}` : ""}${x.action ? ` — الإجراء: ${x.action}` : ""}`));
+  if (d.needs && d.needs.length) L.push("", "📦 المطلوب:", ...d.needs.map(x => `- ${x.item}${x.qty ? ` (${x.qty})` : ""}`));
+  if (d.tomorrow && d.tomorrow.length) L.push("", "📅 بكره:", ...d.tomorrow.map(x => "- " + x));
+  if (!r.ai) L.push("", "الكلام زي ما اتقال:", r.raw);
+  return L.join("\n");
+}
+function siteXlsx(rs, name){
+  const rows = rs.map(r => { const d = r.data || {}; return [r.date, r.site, d.engineers ?? "", d.technicians ?? "", d.progress ?? "", (d.done || []).join(" • "), (d.in_progress || []).map(x => x.item + (x.pct != null ? ` ${x.pct}%` : "")).join(" • "),
+    (d.issues || []).map(x => x.issue + (x.owner ? ` (${x.owner})` : "")).join(" • "), (d.needs || []).map(x => x.item + (x.qty ? ` ${x.qty}` : "")).join(" • "), (d.tomorrow || []).join(" • ")]; });
+  saveXlsx({fileName: name, sheets: [{name: "تقارير المواقع", columns: ["التاريخ", "الموقع", "مهندسين", "فنيين", "الإنجاز %", "اللي خلص", "شغال فيه", "المشاكل", "المطلوب", "بكره"], rows}]});
+}
+function siteWeekText(site){
+  const since = Date.now() - 7 * 864e5, rs = (S.siteReports || []).filter(r => r.site === site && new Date(r.date + "T12:00") >= since).sort((a, b) => a.date.localeCompare(b.date));
+  if (!rs.length) return "";
+  const issues = rs.flatMap(r => (r.data.issues || []).map(x => x.issue)), needs = rs.flatMap(r => (r.data.needs || []).map(x => x.item + (x.qty ? ` (${x.qty})` : "")));
+  const crew = rs.map(r => r.data.technicians || 0).filter(Boolean), prog = rs.map(r => r.data.progress).filter(x => x != null);
+  return [`📋 ملخص أسبوع موقع ${site} (${fmtN(rs.length)} تقرير)`, crew.length ? `👷 متوسط الفنيين: ${fmtN(Math.round(crew.reduce((a, b) => a + b, 0) / crew.length))}` : "",
+    prog.length ? `📊 الإنجاز: من ${fmtN(prog[0])}% لـ ${fmtN(prog[prog.length - 1])}%` : "",
+    "", "✅ اتعمل:", ...rs.flatMap(r => (r.data.done || []).map(x => `- ${x} (${fmtShort(r.date + "T12:00")})`)),
+    issues.length ? "\n⚠️ المشاكل اللي ظهرت:\n" + [...new Set(issues)].map(x => "- " + x).join("\n") : "", needs.length ? "\n📦 المطلوب:\n" + [...new Set(needs)].map(x => "- " + x).join("\n") : ""].filter(x => x !== "").join("\n");
+}
+let siteOpenId = null;
+function openSiteReport(id){
+  const r = (S.siteReports || []).find(x => x.id === id); if (!r){ toast("التقرير مش موجود."); return; }
+  siteOpenId = id;
+  const raw = h("textarea",{class: "voice-select", rows: "4"}, r.raw);
+  sheet.replaceChildren(h("h2",{id: "sheetTitle"}, `📋 ${r.site}`), h("div",{class: "sub"}, fmtDay(r.date + "T12:00") + (r.state === "loading" ? " • ⏳ بنظّم…" : "")),
+    h("pre",{class: "report"}, siteText(r)),
+    h("div",{class: "row", style: "flex-wrap:wrap"},
+      h("button",{class: "btn primary", onclick: () => openUrl(waLink(null, siteText(r)))}, "واتساب"),
+      h("button",{class: "btn ghost", onclick: () => printReport(siteText(r))}, "📄 PDF"),
+      h("button",{class: "btn ghost", onclick: () => siteXlsx([r], `تقرير-${r.site}-${r.date}`)}, "📊 Excel"),
+      h("button",{class: "btn ghost", onclick: () => copyText(siteText(r))}, "انسخ")),
+    h("details",{class: "card", style: "padding:8px;margin-top:6px"}, h("summary",{}, "✏️ عدّل الكلام"), raw,
+      h("button",{class: "btn ghost", onclick: e => { r.raw = raw.value.trim(); r.data = siteLocalExtract(r.raw); siteAI(r, e.currentTarget); }}, "🔁 نظّمه تاني")),
+    h("div",{class: "row"}, h("button",{class: "btn ghost", onclick: () => { if (confirm("أمسح التقرير؟")){ S.siteReports = S.siteReports.filter(x => x.id !== id); siteOpenId = null; store.save(); render(); closeSheet(); } }}, "امسح"),
+      h("button",{class: "btn ghost", onclick: () => { siteOpenId = null; closeSheet(); }}, "تمام")));
+  sheetBack.hidden = false;
+}
+function siteSection(){
+  const box = h("div",{id: "sec-sites"}, h("div",{class: "section-title"}, "📋 تقارير المواقع"));
+  const rs = S.siteReports || [];
+  if (!rs.length){ box.append(h("div",{class: "att-note", style: "margin:0 4px"}, "اضغط المايك وقول مثلاً: \"تقرير موقع QNB: 4 فنيين ومهندس، خلصنا بارتيشن الدور التاني، ناقص زجاج 6 ألواح، الكهربا متأخرة، بكره نركّب الأبواب\"، ويطلع تقرير منظم تبعته واتساب أو PDF أو Excel.")); return box; }
+  const sites = [...new Set(rs.map(r => r.site))];
+  for (const site of sites.slice(0, 8)){
+    const mine = rs.filter(r => r.site === site);
+    box.append(h("div",{class: "card"}, h("div",{class: "row", style: "justify-content:space-between;align-items:center"}, h("b",{}, site), h("span",{class: "sub"}, `${fmtN(mine.length)} تقرير`)),
+      h("div",{class: "chips"}, mine.slice(0, 6).map(r => h("button",{class: "chip", onclick: () => openSiteReport(r.id)}, fmtShort(r.date + "T12:00") + ((r.data.issues || []).length ? " ⚠️" : "")))),
+      h("div",{class: "row", style: "flex-wrap:wrap"},
+        h("button",{class: "link-btn", style: "color:var(--breeze)", onclick: () => { const t = siteWeekText(site); if (!t){ toast("مفيش تقارير الأسبوع ده."); return; } openUrl(waLink(null, t)); }}, "ملخص الأسبوع واتساب"),
+        h("button",{class: "link-btn", style: "color:var(--breeze)", onclick: () => siteXlsx(mine, `تقارير-${site}`)}, "كل التقارير Excel"))));
+  }
   return box;
 }
 

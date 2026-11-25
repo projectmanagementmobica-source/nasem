@@ -817,7 +817,7 @@
       const key = await deviceKey(), out = [];
       for (const it of items.slice(0, 300)) {
         const iv = crypto.getRandomValues(new Uint8Array(12));
-        const ct = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, new TextEncoder().encode(JSON.stringify({ t: String(it.title).slice(0, 120), b: String(it.body || "").slice(0, 240) })));
+        const ct = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, new TextEncoder().encode(JSON.stringify({ t: String(it.title).slice(0, 120), b: String(it.body || "").slice(0, 240), ...(it.u ? { u: String(it.u).slice(0, 80) } : {}) })));
         out.push({ client_id: String(it.id).slice(0, 80), fire_at: new Date(it.at).toISOString(), ciphertext: bytesToB64(ct), iv: bytesToB64(iv) });
       }
       const res = await gwPost("/v1/push/schedule", { items: out });

@@ -96,9 +96,11 @@ class PushService:
         due = (await self._s.execute(
             select(ScheduledPush).where(ScheduledPush.sent_at.is_(None), ScheduledPush.fire_at <= now).order_by(ScheduledPush.fire_at).limit(limit).with_for_update(skip_locked=True)
         )).scalars().all()
-        sent = 0
+        sent = failed = orphan = 0
         for item in due:
             subs = (await self._s.execute(select(PushSubscription).where(PushSubscription.user_id == item.user_id))).scalars().all()
+            if not subs:
+                orphan += 1
             payload = json.dumps({"c": item.ciphertext, "iv": item.iv, "id": item.client_id})
             for sub in subs:
                 info = {"endpoint": sub.endpoint, "keys": {"p256dh": sub.p256dh, "auth": sub.auth}}
@@ -107,12 +109,20 @@ class PushService:
                     sent += 1
                 except Exception as exc:  # expired subscriptions are removed
                     status = getattr(getattr(exc, "response", None), "status_code", None)
+                    failed += 1
                     if status in (404, 410):
                         await self._s.delete(sub)
                     else:
                         logger.warning("push failed for user %s: %s", item.user_id, exc)
             item.sent_at = now
         await self._s.commit()
+        from app.modules.ops.service import bump
+        if sent:
+            await bump(self._s, "push", "sent", n=sent)
+        if failed:
+            await bump(self._s, "push", "failed", n=failed)
+        if orphan:
+            await bump(self._s, "push", "no_device", "reminder was due but the phone has no notification subscription", n=orphan)
         return sent
 
 
@@ -132,6 +142,10 @@ async def run_tick(maker: async_sessionmaker[AsyncSession], *, purge: bool) -> d
     """One round of background work: due pushes, missed-dose family alerts, and (when asked) retention purge."""
     done: dict[str, Any] = {"push": False, "family": False, "purge": False}
     async with maker() as s:
+        from app.modules.ops.service import bump, purge_ops
+        await bump(s, "tick", "run")
+        if purge:
+            await purge_ops(s)
         if settings.vapid_public_key and settings.vapid_private_key:
             await PushService(s).send_due()
             done["push"] = True

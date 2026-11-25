@@ -128,6 +128,35 @@ async def admin_stats(_: User = Depends(require_admin), session: AsyncSession = 
     return await AccessService(session).stats()
 
 
+@router.get("/v1/admin/health")
+async def admin_health(_: User = Depends(require_admin), session: AsyncSession = Depends(get_session)) -> dict[str, Any]:
+    from datetime import UTC, datetime
+    from sqlalchemy import func, select
+    from app.core.config import settings
+    from app.modules.ops.service import health
+    from app.modules.push.models import PushSubscription, ScheduledPush
+    from app.modules.scheduler.models import WakeSlot
+    h = await health(session)
+    now = datetime.now(UTC)
+    h["providers"] = {
+        "gemini": bool(settings.gemini_api_key and settings.gemini_api_key.get_secret_value().strip()),
+        "groq": bool(settings.groq_api_key and settings.groq_api_key.get_secret_value().strip()),
+        "anthropic": bool(settings.anthropic_api_key and settings.anthropic_api_key.get_secret_value().strip()),
+        "openai": bool(settings.openai_api_key and settings.openai_api_key.get_secret_value().strip()),
+    }
+    h["order"] = list(settings.gateway_provider_order)
+    h["push"] = {
+        "configured": bool(settings.vapid_public_key and settings.vapid_private_key),
+        "subscriptions": int(await session.scalar(select(func.count()).select_from(PushSubscription)) or 0),
+        "pending": int(await session.scalar(select(func.count()).select_from(ScheduledPush).where(ScheduledPush.sent_at.is_(None))) or 0),
+        "next_at": (lambda v: v.isoformat() if v else None)(await session.scalar(select(func.min(ScheduledPush.fire_at)).where(ScheduledPush.sent_at.is_(None), ScheduledPush.fire_at > now))),
+        "wake_slots": int(await session.scalar(select(func.count()).select_from(WakeSlot).where(WakeSlot.at > now)) or 0),
+        "qstash": bool(settings.qstash_token),
+    }
+    h["now"] = now.isoformat()
+    return h
+
+
 @router.get("/admin", include_in_schema=False)
 async def admin_page() -> FileResponse:
     return FileResponse(Path(__file__).parent / "static" / "admin.html", media_type="text/html")
