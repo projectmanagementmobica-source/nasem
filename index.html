@@ -386,7 +386,7 @@ main{overflow-x:hidden}
     <button class="brand" id="aboutBtn" aria-label="تعرّف على نسيم">
       <svg class="logo" viewBox="0 0 48 48" aria-hidden="true"><defs><radialGradient id="lg" cx="35%" cy="30%" r="75%"><stop offset="0" stop-color="#8FD3DE"/><stop offset="1" stop-color="#1F7A8C"/></radialGradient></defs><circle cx="24" cy="24" r="22" fill="url(#lg)"/><path d="M11 21c5-4 10-4 15 0s10 4 13 1M11 28c5-4 10-4 15 0s9 4 12 1" fill="none" stroke="#fff" stroke-width="2.6" stroke-linecap="round" opacity=".95"/></svg>
       <span class="brand-text">
-        <h1>نسيم <span class="demo-tag">تجريبي</span></h1>
+        <h1>نسيم <span class="demo-tag" id="verTag">5.0</span></h1>
         <p>ذاكرتك والتزاماتك، بصوتك</p>
       </span>
     </button>
@@ -2650,7 +2650,17 @@ function cloudVoiceSettings(){
 
 /* ---------------- identity: "تعرّف على نسيم" ---------------- */
 const APP = {
-  name: "نسيم", nameLatin: "NASEM AI", version: "إصدار 4.6 (تطبيق)",
+  name: "نسيم", nameLatin: "NASEM AI", version: "إصدار 5.0 (تطبيق)",
+  updated: "2026-11-25",
+  changes: [
+    "📊 دراسات الجدوى، واقترح عليّ مشروع حسب رأس مالك والسوق",
+    "🧊 مجسم 3D للبيت بعد التشطيب: لف حواليه، ادخل جواه، افرش وغيّر الألوان",
+    "📐 مقايسة البناء: كميات من الحفر للتشطيب، وأسعار النهاردة بمصادرها، وتصميم مبدئي",
+    "🤝 الجمعية للمنظّم: لكل مشترك اشتراكه وميعاد استحقاقه، وتنبيه قبل القبض",
+    "☝️ افتح نسيم ببصمتك، ودخول مباشر لصاحب نسيم",
+    "🔎 البحث الذكي بيفهم \"سعر …\" و\"أخبار …\" من غير ما تقول ابحث",
+    "💵 سعر الدولار من البنك المركزي اتصلح، والذكاء بقى يختار الموديل الشغال لوحده",
+  ],
   owner: "أشرف قاسم",
   year: 2026,
   can: [
@@ -2686,7 +2696,8 @@ function openAbout(){
   sheet.replaceChildren(
     h("div",{class:"about-head"},
       (() => { const d = document.createElement("div"); d.className = "about-logo"; d.innerHTML = document.querySelector("#aboutBtn .logo").outerHTML; return d; })(),
-      h("div",{}, h("h2",{id:"sheetTitle", style:"margin:0"}, APP.name), h("div",{class:"att-note"}, `${APP.nameLatin} • ${APP.version}`))),
+      h("div",{}, h("h2",{id:"sheetTitle", style:"margin:0"}, APP.name), h("div",{class:"att-note"}, `${APP.nameLatin} • ${APP.version}`), h("div",{class:"att-note"}, `آخر تحديث: ${fmtDay(APP.updated + "T12:00")}`))),
+    versionCard(),
     h("p",{}, "مساعدك الشخصي: بيفتكر اللي يهمك، وينظّم التزاماتك، ويساعدك تخلّص أي حاجة بأقل مجهود. بيقترح، وإنت اللي بتقرر."),
     h("div",{class:"owner-card"},
       h("div",{class:"pref-label"}, "المالك"),
@@ -2705,6 +2716,10 @@ function openAbout(){
   sheetBack.hidden = false;
 }
 document.getElementById("aboutBtn").addEventListener("click", openAbout);
+try{ const vt = document.getElementById("verTag"); vt.textContent = "v" + (APP.version.match(/([0-9.]+)/) || [])[1]; vt.title = "الإصدار وآخر تحديث"; }catch(e){}
+setTimeout(() => { try{ const v = (APP.version.match(/([0-9.]+)/) || [])[1], last = localStorage.getItem("nasem-run-ver");
+  if (last && last !== v){ const t = h("div",{class:"update-bar", role:"status"}, `نسيم اتحدّث لإصدار ${v} ✨`, h("button",{onclick: () => { t.remove(); openAbout(); }}, "شوف الجديد"), h("button",{onclick: () => t.remove(), "aria-label":"اقفل"}, "✕")); document.body.appendChild(t); setTimeout(() => t.remove(), 15000); }
+  localStorage.setItem("nasem-run-ver", v); }catch(e){} }, 2500);
 
 /* ---------------- app build: AI source settings ---------------- */
 function aiSettings(){
@@ -4109,13 +4124,29 @@ if (typeof window !== "undefined" && window.addEventListener) window.addEventLis
 
 /* New version on GitHub? Say so, and update with one tap (no more "close it twice"). */
 let updateShown = false;
-async function checkForUpdate(){
-  if (updateShown || !location.protocol.startsWith("http")) return;
+const appVer = () => (APP.version.match(/([0-9.]+)/) || [])[1];
+function versionCard(){
+  const st = h("div",{class:"att-note", "aria-live":"polite"});
+  const btn = h("button",{class:"btn ghost", onclick: async () => {
+    btn.disabled = true; st.textContent = "بدوّر على تحديث…";
+    const r = await checkForUpdate(true); btn.disabled = false;
+    st.textContent = r === "new" ? "فيه نسخة جديدة — اضغط \"حدّث دلوقتي\" تحت." : r === "same" ? `إنت على آخر إصدار (${appVer()}) ✓` : "مش قادر أوصل للنت دلوقتي.";
+  }}, "🔄 اتأكد من التحديث");
+  const seen = lsGet("nasem-seen-ver") === appVer();
+  return h("div",{class:"owner-card"},
+    h("div",{class:"row", style:"justify-content:space-between;align-items:center"}, h("b",{}, `${APP.version}`), h("span",{class:"chip"}, fmtDay(APP.updated + "T12:00"))),
+    h("details",{open: !seen || null, ontoggle: () => lsSet("nasem-seen-ver", appVer())}, h("summary",{}, "✨ الجديد في الإصدار ده"),
+      h("ul",{class:"about-list"}, APP.changes.map(c => h("li",{}, c)))),
+    h("div",{class:"row"}, btn), st);
+}
+async function checkForUpdate(manual){
+  if ((updateShown && !manual) || !location.protocol.startsWith("http")) return manual ? "offline" : undefined;
   try{
     const html = await (await fetch("./index.html", {cache:"no-store"})).text();
     const latest = (html.match(/version: "إصدار ([0-9.]+) \(تطبيق\)"/) || [])[1];
-    const mine = (APP.version.match(/([0-9.]+)/) || [])[1];
-    if (!latest || !mine || latest === mine) return;
+    const mine = appVer();
+    if (!latest || !mine || latest === mine) return "same";
+    if (updateShown) return "new";
     updateShown = true;
     const bar = h("div",{class:"update-bar", role:"status"}, `فيه نسخة جديدة من نسيم (${latest})`,
       h("button",{onclick: async () => {
@@ -4124,7 +4155,8 @@ async function checkForUpdate(){
         location.reload();
       }}, "حدّث دلوقتي"));
     document.body.appendChild(bar);
-  }catch(e){}
+    return "new";
+  }catch(e){ return "offline"; }
 }
 if (typeof location !== "undefined" && String(location.protocol).startsWith("http")){   // only when opened from a real link
   setTimeout(checkForUpdate, 4000);
