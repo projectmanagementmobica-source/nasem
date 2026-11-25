@@ -331,6 +331,23 @@ main{overflow-x:hidden}
   .msg{max-width:92%}
 }
 
+
+/* v5.3 header + tabs: clear icons, every section visible at once, settings always one tap away */
+.icon-btn.gear{background:var(--breeze-soft);border-color:var(--breeze);color:var(--breeze)}
+.tabs{display:grid;grid-template-columns:repeat(6,1fr);gap:4px;padding:0 12px 10px;overflow:visible}
+.tab{display:flex;flex-direction:column;align-items:center;gap:3px;min-width:0;padding:7px 2px 6px;border-radius:12px;font-size:12.5px;line-height:1.1;white-space:nowrap}
+.tab .tab-ic{position:relative;display:grid;place-items:center;width:26px;height:26px}
+.tab .tab-ic svg{width:22px;height:22px}
+.tab .tab-tx{max-width:100%;overflow:hidden;text-overflow:ellipsis}
+.tab[aria-selected="true"]{color:var(--breeze);background:var(--surface);box-shadow:0 0 0 1px var(--line),0 2px 8px rgba(0,0,0,.06)}
+.tab[aria-selected="true"] .tab-ic{background:var(--breeze-soft);border-radius:9px}
+.tab .badge{position:absolute;top:-6px;inset-inline-end:-10px;margin:0;min-width:17px;height:17px;font-size:10.5px;padding:0 4px}
+@media (max-width:430px){
+  .tabs{gap:2px;padding:0 6px 8px}
+  .tab{font-size:11.5px;padding:6px 1px 5px}
+  .tab .tab-ic svg{width:21px;height:21px}
+}
+@media (max-width:340px){ .tab .tab-tx{font-size:10.5px} }
 /* decision loop */
 .dec-options{display:flex;flex-direction:column;gap:8px}
 .dec-opt{border:1px solid var(--line);border-radius:12px;padding:10px 12px;display:flex;flex-direction:column;gap:4px}
@@ -391,11 +408,11 @@ main{overflow-x:hidden}
       </span>
     </button>
     <div class="top-actions">
+      <button class="icon-btn gear" id="settingsBtn" aria-label="الإعدادات" title="الإعدادات">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+      </button>
       <button class="icon-btn" id="searchBtn" aria-label="دوّر في نسيم" title="دوّر في نسيم">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
-      </button>
-      <button class="icon-btn" id="settingsBtn" aria-label="الإعدادات والخصوصية" title="الإعدادات والخصوصية">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v6c0 4.5-3 7.7-7 9-4-1.3-7-4.5-7-9V6l7-3z"/><path d="M9 12l2 2 4-4"/></svg>
       </button>
       <button class="icon-btn" id="callBtn" aria-label="مكالمة مع نسيم" title="مكالمة مع نسيم">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3.1 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.1 4.2 2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.1.9.4 1.8.7 2.7a2 2 0 0 1-.5 2.1L8 9.8a16 16 0 0 0 6 6l1.3-1.3a2 2 0 0 1 2.1-.4c.9.3 1.8.6 2.7.7a2 2 0 0 1 1.7 2z"/></svg>
@@ -406,13 +423,13 @@ main{overflow-x:hidden}
     </div>
   </header>
 
-  <nav class="tabs" role="tablist">
-    <button class="tab" role="tab" data-tab="chat" aria-selected="true">محادثة</button>
-    <button class="tab" role="tab" data-tab="approvals" aria-selected="false">موافقات<span class="badge" id="badge" hidden>0</span></button>
-    <button class="tab" role="tab" data-tab="memory" aria-selected="false">ذاكرتي</button>
-    <button class="tab" role="tab" data-tab="money" aria-selected="false">فلوسي</button>
-    <button class="tab" role="tab" data-tab="tasks" aria-selected="false">التزاماتي</button>
-    <button class="tab" role="tab" data-tab="studio" aria-selected="false">استوديو</button>
+  <nav class="tabs" role="tablist" aria-label="أقسام نسيم">
+    <button class="tab" role="tab" data-tab="chat" aria-selected="true"><span class="tab-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.4A8 8 0 1 1 21 12z"/></svg></span><span class="tab-tx">محادثة</span></button>
+    <button class="tab" role="tab" data-tab="approvals" aria-selected="false"><span class="tab-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M8 12.5l2.7 2.7L16 9.8"/></svg><span class="badge" id="badge" hidden>0</span></span><span class="tab-tx">موافقات</span></button>
+    <button class="tab" role="tab" data-tab="memory" aria-selected="false"><span class="tab-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 18h6M10 21h4M12 3a6 6 0 0 0-3.5 10.9c.6.5 1 1.2 1 2V16h5v-.1c0-.8.4-1.5 1-2A6 6 0 0 0 12 3z"/></svg></span><span class="tab-tx">ذاكرتي</span></button>
+    <button class="tab" role="tab" data-tab="money" aria-selected="false"><span class="tab-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="6" width="18" height="13" rx="2.5"/><path d="M3 10h18M16 14.5h2"/></svg></span><span class="tab-tx">فلوسي</span></button>
+    <button class="tab" role="tab" data-tab="tasks" aria-selected="false"><span class="tab-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.5" y="5" width="17" height="15" rx="2.5"/><path d="M8 3v4M16 3v4M3.5 10h17M8 14l2 2 4-4"/></svg></span><span class="tab-tx">التزاماتي</span></button>
+    <button class="tab" role="tab" data-tab="studio" aria-selected="false"><span class="tab-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l1.8 4.6L18.5 9l-4.7 1.4L12 15l-1.8-4.6L5.5 9l4.7-1.4z"/><path d="M18 15l.8 2 2 .8-2 .8-.8 2-.8-2-2-.8 2-.8z"/></svg></span><span class="tab-tx">استوديو</span></button>
   </nav>
 
   <main id="main">
@@ -2650,9 +2667,10 @@ function cloudVoiceSettings(){
 
 /* ---------------- identity: "تعرّف على نسيم" ---------------- */
 const APP = {
-  name: "نسيم", nameLatin: "NASEM AI", version: "إصدار 5.2 (تطبيق)",
+  name: "نسيم", nameLatin: "NASEM AI", version: "إصدار 5.3 (تطبيق)",
   updated: "2026-11-25",
   changes: [
+    "🧭 الأقسام فوق بقت بأيقونات واضحة وكلها ظاهرة مرة واحدة، وأيقونة ⚙️ الإعدادات ظاهرة على طول",
     "⚡ الذكاء بقى يستخدم Gemini 3.6 Flash المتاح مجاناً على حسابك على طول",
     "📐 المقايسة بتفهم \"100م\" و\"10 في 10\"",
     "🛟 لو بحث جوجل المجاني خلص، نسيم بيكمّل بمعرفة الذكاء ويقولك بوضوح إن مفيش مصادر حديثة",
