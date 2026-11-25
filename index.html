@@ -2741,8 +2741,21 @@ function aiSettings(){
           h("div",{class:"row"},
             h("button",{class:"btn ghost", onclick: async e => { const b = e.currentTarget; b.textContent = "بجرّب…"; try{ await A.test("gateway"); b.textContent = "شغال ✓"; }catch(x){ b.textContent = "مش شغال (" + (x.code || "خطأ") + ")"; } }}, "جرّب الاتصال"),
             h("button",{class:"btn ghost", onclick: async () => { await G.logout(); openSettings(); }}, "خروج")))
-      : managed ? h("div",{}, h("div",{class:"att-note"}, "نسيم ده بيشتغل بموافقة صاحبه."),
-          h("div",{class:"row"}, h("button",{class:"btn primary", onclick:() => openActivation()}, A.activation.pending() ? "حالة طلب التفعيل" : "📨 اطلب تفعيل")))
+      : managed ? (() => {
+          const own = h("div",{hidden:true},
+            h("label",{class:"ai-field"}, h("span",{class:"pref-label"}, "إيميل المالك"), email),
+            h("label",{class:"ai-field"}, h("span",{class:"pref-label"}, "كلمة السر"), pass),
+            h("div",{class:"row"}, h("button",{class:"btn primary", onclick: async () => {
+              status.textContent = "بدخل…";
+              try{ await G.login(A.managedUrl(), email.value.trim(), pass.value); pass.value = ""; toast("أهلاً يا صاحب نسيم — الموبايل ده اتفعّل."); openSettings(); }
+              catch(x){ status.textContent = x.code === "bad_login" ? "الإيميل أو كلمة السر غلط." : "مش قادر أوصل للسيرفر دلوقتي."; }
+            }}, "دخول المالك")), status);
+          return h("div",{}, h("div",{class:"att-note"}, "نسيم ده بيشتغل بموافقة صاحبه."),
+            h("div",{class:"row"},
+              h("button",{class:"btn primary", onclick:() => openActivation()}, A.activation.pending() ? "حالة طلب التفعيل" : "📨 اطلب تفعيل"),
+              h("button",{class:"btn ghost", onclick:() => { own.hidden = !own.hidden; }}, "🔑 أنا صاحب نسيم")),
+            own);
+        })()
       : h("div",{},
           h("label",{class:"ai-field"}, h("span",{class:"pref-label"}, "رابط السيرفر"), url),
           h("label",{class:"ai-field"}, h("span",{class:"pref-label"}, "الإيميل"), email),

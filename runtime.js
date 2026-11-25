@@ -836,7 +836,7 @@
   }
 
   window.claude = { use: async (name) => ({ sample, db, user, downloads })[name] || null };
-  window.NASEM_APP = { getConfig, setConfig, test, shredAll, state, PROVIDER_NAMES, tts, gateway: { get: getGW, login: gwLogin, logout: gwLogout }, activation, ready, managed: () => !!managedServer(), canAudio, canImage, image, takeShared, push, usage, exhausted, family, backup };
+  window.NASEM_APP = { getConfig, setConfig, test, shredAll, state, PROVIDER_NAMES, tts, gateway: { get: getGW, login: gwLogin, logout: gwLogout }, activation, ready, managed: () => !!managedServer(), managedUrl: () => managedServer(), canAudio, canImage, image, takeShared, push, usage, exhausted, family, backup };
 
   if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
     window.addEventListener("load", () => navigator.serviceWorker.register("./sw.js").catch(() => {}));
