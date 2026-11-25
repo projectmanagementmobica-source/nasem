@@ -212,7 +212,14 @@
   function setGW(g) { localStorage.setItem(GW_KEY, JSON.stringify(g)); }
   const base = (u) => String(u || "").trim().replace(/\/+$/, "");
 
-  async function gwRefresh() {
+  // One refresh at a time: refresh tokens rotate, so two parallel refreshes would look like token theft
+  // to the server and sign the phone out. Every caller waits on the same attempt.
+  let refreshing = null;
+  function gwRefresh() {
+    if (!refreshing) refreshing = gwRefreshOnce().finally(() => { setTimeout(() => { refreshing = null; }, 2000); });
+    return refreshing;
+  }
+  async function gwRefreshOnce() {
     const g = getGW(); if (!g.refresh) return false;
     try {
       const r = await fetch(base(g.url) + "/v1/auth/refresh", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ refresh_token: g.refresh }) });

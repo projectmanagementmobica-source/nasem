@@ -4504,10 +4504,18 @@ function parseCbe(d){
   const rates = {}; let date = null;
   const put = (cur, egp) => { cur = String(cur || "").toUpperCase(); if (FX_RE[cur] && isFinite(egp) && egp > 1 && egp < 1000) rates[cur] = egp; };
   const rows = Array.isArray(d) ? d : Array.isArray(d && d.rates) ? d.rates : Array.isArray(d && d.data) ? d.data : null;
-  if (rows) for (const r of rows){
-    const b = String(r.base || "").toUpperCase(), q = String(r.quote || r.currency || r.symbol || "").toUpperCase(), v = +r.rate || +r.value;
-    if (!v) continue; date = date || r.date || null;
-    if (b === "EGP") put(q, 1 / v); else if (q === "EGP") put(b, v);
+  if (rows){
+    const cross = {};   // base -> {quote: rate}; the source may quote everything against EUR
+    for (const r of rows){
+      const b = String(r.base || "").toUpperCase(), q = String(r.quote || r.currency || r.symbol || "").toUpperCase(), v = +r.rate || +r.value;
+      if (!v) continue; date = date || r.date || null;
+      if (b === "EGP") put(q, 1 / v); else if (q === "EGP") put(b, v);
+      (cross[b] = cross[b] || {})[q] = v;
+    }
+    for (const [b, qs] of Object.entries(cross)){
+      const egpPerBase = b === "EGP" ? 1 : qs.EGP; if (!egpPerBase) continue;
+      for (const [q, v] of Object.entries(qs)) if (q !== "EGP" && !rates[q]) put(q, egpPerBase / v);
+    }
   } else if (d && d.rates && typeof d.rates === "object"){
     const b = String(d.base || "").toUpperCase(); date = d.date || null;
     for (const [k, v] of Object.entries(d.rates)){ if (b === "EGP") put(k, 1 / +v); else if (k.toUpperCase() === "EGP") put(b, +v); }
@@ -4577,6 +4585,10 @@ async function marketAnswer(t){
   }
   const hit = FX_LIST.filter(([c]) => FX_RE[c].test(t) && m.fx[c]);
   if (hit.length) return hit.map(([c, n]) => `${n} في البنك المركزي ${fx2(m.fx[c])} جنيه${trend(c)}`).join("، ") + "." + age;
+  if (FX_LIST.some(([c]) => FX_RE[c].test(t)) || !FX_LIST.some(([c]) => m.fx[c])){
+    if (!FX_LIST.some(([c]) => m.fx[c])) return (m.g24 ? `سعر البنك المركزي مش متاح دلوقتي. الدهب عيار 21 حوالي ${fx0(goldK(m.g24, 21))} جنيه (تقديري).` : "مش قادر أجيب الأسعار دلوقتي. جرّب تاني بعد شوية.");
+    return "العملة دي مش في أسعار البنك المركزي اللي عندي دلوقتي.";
+  }
   return "نبض السوق: " + FX_LIST.filter(([c]) => m.fx[c]).slice(0, 3).map(([c, n]) => `${n} ${fx2(m.fx[c])}`).join("، ") + (m.g24 ? `، وعيار 21 حوالي ${fx0(goldK(m.g24, 21))}` : "") + "." + age;
 }
 /* "قولّي لما الدولار ينزل تحت 48" • "نبهني لو عيار 21 عدى 6000" */
