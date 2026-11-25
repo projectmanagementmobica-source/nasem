@@ -98,6 +98,11 @@ class GatewayService:
                 await bump(self._session, "ai", f"{name}:fail", str(exc))
                 last = exc
                 continue
+            except Exception as exc:   # a provider bug must never take the whole answer down: log it and use the next one
+                logger.exception("gateway %s: %s crashed, trying next", request_id, name)
+                await bump(self._session, "ai", f"{name}:fail", f"crash: {type(exc).__name__}: {exc}"[:200])
+                last = LLMUnavailableError(f"{name} crashed: {type(exc).__name__}", retryable=True)
+                continue
             await bump(self._session, "ai", f"{name}:ok" + (":nosearch" if isinstance(data, dict) and data.get("_no_search") else ""))
             return CompleteResponse(
                 request_id=request_id, status="success", data=vault.unmask(data),

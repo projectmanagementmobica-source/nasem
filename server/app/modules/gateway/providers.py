@@ -243,6 +243,7 @@ class GeminiProvider:
                         )
                     except httpx.HTTPError as exc:
                         raise LLMUnavailableError(f"gemini connection: {exc}", retryable=True) from exc
+                    log.info("gemini %s -> %s%s", model, res.status_code, " (search)" if "tools" in payload else "")
                     if res.status_code in (500, 502, 503, 504) and retry == 0 and settings.gemini_retry_delay > 0:
                         await asyncio.sleep(settings.gemini_retry_delay)
                         continue
@@ -269,6 +270,10 @@ class GeminiProvider:
         no_search = False
         try:
             res = await attempt(body)
+            if res.status_code == 429 and "tools" in body and "exceeded your current quota" in res.text:
+                # The whole free Gemini quota is used up: don't spend more calls here, let the next provider answer.
+                log.warning("gemini free quota exhausted, handing over to the next provider")
+                raise LLMUnavailableError("gemini free quota exhausted", retryable=False)
             if res.status_code == 429 and "tools" in body:
                 # The free Google Search grounding quota is separate from (and smaller than) plain generation:
                 # answer from the model's own knowledge instead of failing, and say so.
