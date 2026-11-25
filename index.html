@@ -1348,7 +1348,7 @@ async function send(text, source = "text"){
   if (text.length > MAX_INPUT){ toast("الرسالة أطول من 4000 حرف."); return; }
   // Simple things are answered on the phone itself: instant, private, offline, and they don't spend the AI quota.
   if (!EMERGENCY_RE.test(text)){
-    const lr = localHelp(text) || localSearch(text) || localBooks(text) || localSpend(text) || localAnswer(text) || marketAlertLocal(text) || (isMarketText(text) ? await marketAnswer(text) : null);
+    const lr = localHelp(text) || localSearch(text) || localBuild(text) || localBooks(text) || localSpend(text) || localAnswer(text) || marketAlertLocal(text) || (isMarketText(text) ? await marketAnswer(text) : null);
     const local = lr && typeof lr === "object" ? lr.text : lr;
     if (local){
       S.messages.push({id:uid(), role:"user", text, at:nowISO(), source}); noteMessage(text, source);
@@ -1606,9 +1606,10 @@ function renderChat(){
     if (m.links) wrap.append(h("div",{class:"fb-row"}, m.links.map(l => /^#search:/.test(l.url) ? h("button",{class:"fb", onclick:() => openSearch(l.url.slice(8))}, l.label)
       : l.url === "#say" ? h("button",{class:"fb", onclick:openSayAll}, l.label)
       : /^#research:/.test(l.url) ? h("button",{class:"fb", onclick:() => startResearch(l.url.slice(10))}, l.label)
+      : /^#build:/.test(l.url) ? h("button",{class:"fb", onclick:() => openBuild(l.url.slice(7))}, l.label)
       : h("a",{class:"fb", href:l.url, target: /^tel:/.test(l.url) ? null : "_blank", rel:"noopener"}, l.label))));
     if (m.privacy && (m.privacy.hidden || m.privacy.audio || m.privacy.image)){
-      const box = h("div",{class:"sent", hidden:true}, h("div",{class:"sent-label"}, "اللي وصل لـ Claude من رسالتك:"), h("div",{}, m.privacy.sent));
+      const box = h("div",{class:"sent", hidden:true}, h("div",{class:"sent-label"}, "اللي وصل لخدمة الذكاء من رسالتك:"), h("div",{}, m.privacy.sent));
       wrap.append(h("div",{class:"chips"}, h("span",{class:"chip lockchip"},
         m.privacy.audio ? "الفويس اتبعت زي ما هو، والإخفاء بيشتغل على النص بس" : m.privacy.image ? "الصورة اتبعتت زي ما هي، والإخفاء بيشتغل على النص بس" : m.privacy.hidden ? `اتخفى ${m.privacy.hidden} ${m.privacy.hidden === 1 ? "تفصيلة" : "تفاصيل"} قبل الإرسال` : "ما لقيتش تفاصيل خاصة معروفة تتخفى",
         h("button",{onclick:e => { box.hidden = !box.hidden; e.currentTarget.textContent = box.hidden ? "شوف" : "اخفي"; }}, "شوف"))), box);
@@ -4666,6 +4667,7 @@ function projectsSection(){
     card.append(h("div",{class:"row", style:"flex-wrap:wrap"}, nm, q, u, h("button",{class:"btn ghost", onclick:() => {
       if (!nm.value.trim() || !(+q.value > 0)){ toast("اكتب الصنف والكمية."); return; }
       p.items.push({id:uid(), name:nm.value.trim(), qty:+q.value, unit:u.value, price:null}); render(); store.save(); }}, "ضيف")));
+    if (p.build) card.append(h("div",{class:"row"}, h("button",{class:"btn primary", onclick:() => openBuild(p.id)}, "📐 افتح المقايسة والتقرير")));
     card.append(h("div",{class:"row"},
       h("button",{class:"btn primary", onclick:(ev) => updateProjectPrices(p, ev.target)}, "🔄 حدّث الأسعار من النت"),
       h("button",{class:"link-btn", style:"color:var(--muted)", onclick:() => { if (confirm(`تمسح ${p.name}؟`)){ S.projects = S.projects.filter(x => x !== p); render(); store.save(); } }}, "امسح المشروع")));
@@ -4708,6 +4710,230 @@ ${list}`;
 }
 if (typeof location !== "undefined" && String(location.protocol).startsWith("http"))
   setTimeout(() => { if (S.marketAlerts && S.marketAlerts.some(a => !a.fired)) refreshMarket(false).then(() => render()).catch(() => {}); }, 5000);
+
+/* ================= مقايسة البناء الذكية: "بناء منزل 100 متر دورين" → كميات + أسعار من النت بمصادر + تقرير + تصميم مبدئي ================= */
+/* الكميات بمعدلات استرشادية متعارف عليها للمباني السكنية الخرسانية (هيكل خرساني حتى 5 أدوار) — للتخطيط والميزانية المبدئية بس. */
+const BUILD_LEVELS = {none: "عضم (هيكل ومباني بس)", eco: "تشطيب اقتصادي", mid: "تشطيب لوكس", lux: "تشطيب سوبر لوكس"};
+const BUILD_GROUPS = ["الحفر والأساسات", "الهيكل الخرساني", "المباني", "العزل", "المحارة", "التشطيبات", "الكهرباء والسباكة", "النجارة والألوميتال", "الواجهات"];
+function buildQuantities(inp){
+  const F = +inp.footprint, n = +inp.floors, B = F * n, lvl = inp.level || "mid";
+  const side = inp.w && inp.l ? 2 * (+inp.w + +inp.l) : 4 * Math.sqrt(F);
+  const beds = +inp.bedrooms || Math.max(2, Math.round(F / 35)) * n, baths = +inp.baths || Math.max(1, Math.round(beds / 2));
+  const exc = F * 1.6, pc = F * 0.08, rcF = F * 0.28, rcS = B * 0.30, rc = rcF + rcS;
+  const wall = B * 2.0, plaster = wall * 1.6 + B, floor = B * 0.85, wet = baths * 22 + n * 12, facade = side * 3.1 * n;
+  const steel = (rcF * 90 + rcS * 110) / 1000;
+  const cement = (rc * 350 + pc * 250) / 1000 + wall * 0.018 + plaster * 0.010 + (lvl === "none" ? 0 : floor * 0.008);
+  const sand = rc * 0.45 + pc * 0.5 + wall * 0.06 + plaster * 0.025 + (lvl === "none" ? 0 : floor * 0.04);
+  const it = (group, name, qty, unit, how) => ({id: uid(), group, name, qty: Math.ceil(qty * 10) / 10, unit, how, price: null});
+  const L = {eco: "اقتصادي", mid: "متوسط (لوكس)", lux: "عالي (سوبر لوكس)"}[lvl];
+  const items = [
+    it("الحفر والأساسات", "حفر وردم (مصنعية بالمعدات)", exc, "متر مكعب", "مساحة الدور × 1.6م عمق تقريبي"),
+    it("الحفر والأساسات", "خرسانة عادية للنظافة (مصنعية)", pc, "متر مكعب", "مساحة الدور × 0.08"),
+    it("الحفر والأساسات", "مصنعية خرسانة مسلحة للأساسات (نجارة وحدادة وصب)", rcF, "متر مكعب", "قواعد + سملات + رقاب: مساحة الدور × 0.28"),
+    it("الهيكل الخرساني", "مصنعية خرسانة مسلحة للهيكل (نجارة وحدادة وصب)", rcS, "متر مكعب", "أعمدة + كمرات + بلاطات + سلم: المسطح × 0.30"),
+    it("الهيكل الخرساني", "حديد تسليح", steel, "طن", "90 كجم/م³ أساسات و110 كجم/م³ هيكل"),
+    it("الهيكل الخرساني", "أسمنت بورتلاندي", cement, "طن", "خرسانة 350 كجم/م³ + مونة المباني والمحارة والتركيب"),
+    it("الهيكل الخرساني", "رمل", sand, "متر مكعب", "للخرسانة والمونة"),
+    it("الهيكل الخرساني", "زلط أو سن", (rc + pc) * 0.85, "متر مكعب", "0.85 م³ لكل م³ خرسانة"),
+    it("المباني", "طوب أحمر أو أسمنتي 25×12×6", wall * 75 / 1000, "ألف طوبة", `حوائط ${Math.round(wall)} م² × 75 طوبة`),
+    it("المباني", "مصنعية مباني طوب", wall, "متر مربع", "المسطح × 2 م² حوائط بعد خصم الفتحات"),
+    it("العزل", "عزل رطوبة للأساسات (بيتومين)", F * 1.8, "متر مربع", "قواعد وسملات"),
+    it("العزل", "عزل مائي وحراري للسطح", F, "متر مربع", "مساحة السطح"),
+  ];
+  if (lvl !== "none"){
+    items.push(
+      it("المحارة", "محارة داخلية وخارجية (خامات ومصنعية)", plaster, "متر مربع", "وشين للحوائط + الأسقف"),
+      it("التشطيبات", `أرضيات بورسلين أو سيراميك — مستوى ${L} (خامة وتركيب)`, floor, "متر مربع", "85% من المسطح صافي"),
+      it("التشطيبات", `سيراميك حوائط حمامات ومطابخ — مستوى ${L} (خامة وتركيب)`, wet, "متر مربع", `${baths} حمام × 22 م² + مطبخ لكل دور`),
+      it("التشطيبات", `دهانات داخلية — مستوى ${L} (خامة ومصنعية)`, plaster - facade * 0.5, "متر مربع", "مسطح المحارة الداخلي"),
+      it("الكهرباء والسباكة", `تأسيس وتشطيب كهرباء — مستوى ${L}`, B * 0.55, "نقطة", "0.55 نقطة لكل م²"),
+      it("الكهرباء والسباكة", `سباكة حمام كاملة بالأجهزة — مستوى ${L}`, baths, "عدد", "تأسيس وأطقم صحية وخلاطات"),
+      it("الكهرباء والسباكة", `سباكة مطبخ — مستوى ${L}`, n, "عدد", "مطبخ لكل دور"),
+      it("النجارة والألوميتال", `أبواب خشب داخلية — مستوى ${L}`, beds + baths + n * 2, "عدد", "غرف + حمامات + مطبخ وريسبشن"),
+      it("النجارة والألوميتال", `شبابيك ألوميتال — مستوى ${L}`, B * 0.12, "متر مربع", "12% من المسطح"),
+      it("الواجهات", `دهان أو تكسية واجهات — مستوى ${L}`, facade, "متر مربع", `محيط ${Math.round(side)}م × ارتفاع الأدوار`));
+  } else items.push(it("المحارة", "محارة خارجية للواجهات (خامات ومصنعية)", facade, "متر مربع", "الواجهات بس في العضم"));
+  return {items, B, beds, baths, rc, steel};
+}
+function parseBuild(text){
+  const s = clean(text), n = arNorm(s);
+  if (!/(بناء|ابني|ابنى|هبني|نبني|انشاء|تشييد|اعمل بيت|عماره|منزل|بيت|فيلا|شاليه|مبني)/.test(n)) return null;
+  if (!/(متر|م2|م٢|مترمربع)/.test(n) && !/\d+\s*[x×*]\s*\d+/.test(s)) return null;
+  if (/(سعر المتر|ايجار|للبيع|اشتري|شقه للايجار)/.test(n)) return null;
+  const dims = s.match(/(\d+(?:\.\d+)?)\s*[x×*]\s*(\d+(?:\.\d+)?)/);
+  const am = n.match(/(\d+(?:\.\d+)?)\s*(?:متر|م2|م٢)/);
+  let footprint = am ? +am[1] : dims ? +dims[1] * +dims[2] : 0;
+  if (!(footprint >= 30 && footprint <= 5000)) return null;
+  let floors = 1;
+  const fm = n.match(/(\d+)\s*(?:ادوار|دور|طوابق|طابق)/);
+  if (/دورين|طابقين/.test(n)) floors = 2; else if (fm) floors = +fm[1]; else if (/ارضي\s*و\s*اول/.test(n)) floors = 2;
+  if (/(ارضي|وارضي)/.test(n) && fm && !/ارضي\s*و/.test(n)) floors = +fm[1] + 1;
+  floors = Math.min(Math.max(floors, 1), 10);
+  const level = /(عضم|هيكل بس|من غير تشطيب)/.test(n) ? "none" : /(سوبر لوكس|سوبرلوكس|فاخر|الترا)/.test(n) ? "lux" : /(اقتصادي|بسيط|نص تشطيب|نصف تشطيب)/.test(n) ? "eco" : "mid";
+  const bm = n.match(/(\d+)\s*(?:غرف|اوض|غرفه|اوضه)/), tm = n.match(/(\d+)\s*(?:حمام)/);
+  return {footprint, floors, w: dims ? +dims[1] : null, l: dims ? +dims[2] : null, level, bedrooms: bm ? +bm[1] : null, baths: tm ? +tm[1] : null, needs: s, gov: ""};
+}
+const buildTitle = inp => `${inp.floors === 1 ? "بيت دور واحد" : inp.floors === 2 ? "بيت دورين" : `بيت ${fmtN(inp.floors)} أدوار`} — ${fmtN(inp.footprint)} م² للدور`;
+function buildNew(inp){
+  const q = buildQuantities(inp);
+  const title = buildTitle(inp);
+  const p = {id: uid(), name: title, items: q.items, at: nowISO(), build: {inp, beds: q.beds, baths: q.baths, design: null}};
+  S.projects = S.projects || []; S.projects.unshift(p); store.save(); return p;
+}
+function localBuild(text){
+  const inp = parseBuild(text); if (!inp) return null;
+  const p = buildNew(inp);
+  setTimeout(() => openBuild(p.id), 50);
+  return {text: `جهزتلك مقايسة ${p.name}: ${fmtN(p.items.length)} بند من الحفر لحد ${inp.level === "none" ? "المباني (عضم)" : "التشطيب"}، بالكميات. دلوقتي هجيب أسعار النهاردة من النت بمصادرها، وتقدر تطلب تصميم مبدئي.`,
+    links: [{label: "📐 افتح المقايسة", url: "#build:" + p.id}]};
+}
+const buildTotal = p => p.items.reduce((a, i) => a + (i.price || 0) * (+i.qty || 0), 0);
+function buildReportText(p){
+  const b = p.build, inp = b.inp, tot = buildTotal(p), miss = p.items.filter(i => !i.price).length;
+  const L = [`📐 مقايسة ${p.name}`, `المسطح الكلي ${fmtN(inp.footprint * inp.floors)} م² • ${BUILD_LEVELS[inp.level]} • ${fmtN(b.beds)} غرف و${fmtN(b.baths)} حمام`, ""];
+  for (const g of BUILD_GROUPS){
+    const rows = p.items.filter(i => i.group === g); if (!rows.length) continue;
+    L.push(`▪️ ${g}`);
+    for (const i of rows) L.push(`- ${i.name}: ${fmtN(i.qty)} ${i.unit}${i.price ? ` × ${fmtMoney(i.price)} = ${fmtMoney(i.price * i.qty)}` : " (السعر لسه)"}`);
+    L.push(`  الإجمالي: ${fmtMoney(rows.reduce((a, i) => a + (i.price || 0) * i.qty, 0))}`, "");
+  }
+  L.push(`الإجمالي: ${fmtMoney(tot)}`, `احتياطي 10% للطوارئ وفروق الأسعار: ${fmtMoney(tot * 0.1)}`, `الإجمالي المتوقع: ${fmtMoney(tot * 1.1)}`,
+    tot ? `تكلفة المتر المربع: حوالي ${fmtMoney(tot * 1.1 / (inp.footprint * inp.floors))}` : "", miss ? `⚠️ ${fmtN(miss)} بند من غير سعر.` : "",
+    p.updatedAt ? `الأسعار من النت يوم ${fmtDate(p.updatedAt)} ومصادرها جوه التقرير في نسيم.` : "",
+    "", "مهم: دي مقايسة مبدئية للتخطيط والميزانية. التصميم الإنشائي والكميات النهائية لازم يعملها مهندس إنشائي معتمد، والبناء محتاج ترخيص من الحي/المحافظة.");
+  if (b.design && b.design.floors) {
+    L.push("", "🏠 التصميم المبدئي المقترح:");
+    for (const f of b.design.floors) L.push(`${f.name}: ` + f.rooms.map(r => `${r.name} ${fmtN(r.w)}×${fmtN(r.l)}م`).join("، "));
+  }
+  return L.filter(x => x !== null).join("\n");
+}
+async function buildPrices(p, btn){
+  const sample = await getSample(); if (!sample){ toast("محتاج مصدر ذكاء شغال."); return; }
+  const lab = btn ? btn.textContent : ""; if (btn){ btn.disabled = true; btn.textContent = "بدوّر على أسعار النهاردة…"; }
+  const gov = p.build.inp.gov ? ` in ${p.build.inp.gov} governorate` : "";
+  const list = p.items.map(i => `- ${i.name} (لكل ${i.unit})`).join("\n");
+  const prompt = `You are a senior Egyptian quantity surveyor. Use web search to find CURRENT prices in Egypt${gov} for each construction item below, in EGP per the given unit, from Egyptian sources published in the last 45 days (building-materials price bulletins in Egyptian news, producers, contractor price lists). Labor items: typical contractor rates in Egypt. Never invent: if there is no recent source, price = null.
+Reply with ONLY one JSON object: {"prices":[{"name":"<exactly as given>","price":<number or null>,"source":"<site name>","url":"<page url>","as_of":"YYYY-MM-DD"}]}
+Items:
+${list}`;
+  try{
+    const raw = await sample.json(prompt, {modelTier: "default", webSearch: true, cache: false});
+    const got = Array.isArray(raw && raw.prices) ? raw.prices : [];
+    const verified = new Set(((raw && raw._sources) || []).map(x => hostOf(x.url)).filter(Boolean));
+    const before = buildTotal(p); let k = 0;
+    for (const i of p.items){
+      const g = got.find(x => x && String(x.name).trim() === i.name); const pr = g ? toNumber(g.price) : 0;
+      if (!(pr > 0)) continue;
+      i.price = pr; i.source = typeof g.source === "string" ? g.source.slice(0, 40) : "مصدر من النت";
+      i.url = /^https?:\/\//.test(g.url || "") ? g.url : null; i.asOf = typeof g.as_of === "string" ? g.as_of.slice(0, 10) : null;
+      i.checked = !!(i.url && verified.size && verified.has(hostOf(i.url))); k++;
+    }
+    if (before > 0) p.prevTotal = before; p.updatedAt = nowISO();
+    toast(k ? `اتسعّر ${fmtN(k)} من ${fmtN(p.items.length)} بند.` : "ما لقيتش أسعار حديثة بمصدر واضح. تقدر تكتب السعر بإيدك.");
+  }catch(e){ console.warn(e); toast("ما قدرتش أجيب الأسعار دلوقتي. جرّب كمان شوية."); }
+  finally{ if (btn){ btn.disabled = false; btn.textContent = lab; } store.save(); render(); if (buildOpenId === p.id) openBuild(p.id); }
+}
+async function buildDesign(p, btn){
+  const sample = await getSample(); if (!sample){ toast("محتاج مصدر ذكاء شغال."); return; }
+  const inp = p.build.inp, W = inp.w || Math.round(Math.sqrt(inp.footprint) * 10) / 10, Lg = inp.l || Math.round(inp.footprint / W * 10) / 10;
+  const lab = btn ? btn.textContent : ""; if (btn){ btn.disabled = true; btn.textContent = "المعماري بيفكر…"; }
+  const prompt = `You are an award-winning Egyptian residential architect. Propose a practical conceptual layout.
+Plot/footprint per floor: ${W} m wide × ${Lg} m deep (${inp.footprint} m²), floors: ${inp.floors}, finishing: ${BUILD_LEVELS[inp.level]}.
+Owner's needs (Arabic, may be short): """${String(inp.needs || "").slice(0, 400)}""" ; bedrooms total ≈ ${p.build.beds}, bathrooms ≈ ${p.build.baths}.
+Rules: Egyptian family living (reception/ريسبشن near entrance, kitchen ventilated, bedrooms private, master with bathroom if possible), stairs on every floor (≈ 2.5×5 m), natural light and cross ventilation for Egypt's climate (north-facing windows preferred), room areas must add up to about 90% of the floor (walls take the rest). Use realistic room sizes in meters.
+Reply with ONLY JSON: {"concept":"<2 sentences in Egyptian Arabic>","floors":[{"name":"<Arabic floor name>","rooms":[{"name":"<Arabic room name>","w":<m>,"l":<m>}]}],"tips":["<short Arabic tip>", ...max 5],"code_notes":["<Arabic note about Egyptian building code / permits / setbacks to check>", ...max 3]}`;
+  try{
+    const raw = await sample.json(prompt, {modelTier: "default", cache: false});
+    const floors = Array.isArray(raw && raw.floors) ? raw.floors.slice(0, 10).map(f => ({name: String(f.name || "دور").slice(0, 40),
+      rooms: (Array.isArray(f.rooms) ? f.rooms : []).slice(0, 16).map(r => ({name: String(r.name || "غرفة").slice(0, 30), w: Math.max(1, Math.min(30, toNumber(r.w) || 3)), l: Math.max(1, Math.min(30, toNumber(r.l) || 3))}))})).filter(f => f.rooms.length) : [];
+    if (!floors.length) throw new Error("empty design");
+    p.build.design = {W, L: Lg, concept: String(raw.concept || "").slice(0, 400), floors, tips: (raw.tips || []).slice(0, 5).map(x => String(x).slice(0, 200)),
+      code: (raw.code_notes || []).slice(0, 3).map(x => String(x).slice(0, 200)), at: nowISO(), provider: window.NASEM_APP ? window.NASEM_APP.state.lastProvider : null};
+    toast("التصميم المبدئي جاهز ✓");
+  }catch(e){ console.warn(e); toast("ما قدرتش أجهز التصميم دلوقتي. جرّب تاني."); }
+  finally{ if (btn){ btn.disabled = false; btn.textContent = lab; } store.save(); if (buildOpenId === p.id) openBuild(p.id); }
+}
+/* Schematic plan: rooms packed in rows inside the footprint, scaled to fit. Not to scale for construction. */
+function buildPlanSVG(d, f){
+  const W = d.W, L = d.L, rooms = f.rooms.map(r => ({...r, a: r.w * r.l})).sort((a, b) => b.a - a.a);
+  const tot = rooms.reduce((a, r) => a + r.a, 0) || 1, k = (W * L) / tot; rooms.forEach(r => { r.a *= k; });
+  const rows = []; let cur = [], curA = 0; const target = W * Math.max(2.8, Math.min(5, L / Math.ceil(rooms.length / 3)));
+  for (const r of rooms){ cur.push(r); curA += r.a; if (curA >= target * 0.9){ rows.push(cur); cur = []; curA = 0; } }
+  if (cur.length) rows.push(cur);
+  const S0 = 300 / Math.max(W, L), pad = 6; let y = 0, out = "";
+  const hue = n => ({"ريسبشن": "#d8ecf3", "صالة": "#d8ecf3", "مطبخ": "#fde9c8", "حمام": "#d6e8ff", "سلم": "#e3e3e3", "نوم": "#e2f3dc", "ماستر": "#e2f3dc"}[Object.keys({"ريسبشن":1,"صالة":1,"مطبخ":1,"حمام":1,"سلم":1,"نوم":1,"ماستر":1}).find(x => n.includes(x))] || "#f1ecf7");
+  for (const row of rows){
+    const ra = row.reduce((a, r) => a + r.a, 0), rh = ra / W; let x = 0;
+    for (const r of row){
+      const rw = r.a / rh, X = pad + x * S0, Y = pad + y * S0, w = rw * S0, hh = rh * S0;
+      out += `<rect x="${X.toFixed(1)}" y="${Y.toFixed(1)}" width="${w.toFixed(1)}" height="${hh.toFixed(1)}" fill="${hue(r.name)}" stroke="#334" stroke-width="1.5"/>`;
+      if (w > 18 && hh > 18) out += `<text x="${(X + w / 2).toFixed(1)}" y="${(Y + hh / 2).toFixed(1)}" text-anchor="middle" font-size="${w > 40 ? 10 : 8}" fill="#223">${escHtml(r.name)}</text><text x="${(X + w / 2).toFixed(1)}" y="${(Y + hh / 2 + 12).toFixed(1)}" text-anchor="middle" font-size="9" fill="#556">${fmtN(r.w)}×${fmtN(r.l)}</text>`;
+      x += rw;
+    }
+    y += rh;
+  }
+  const vw = W * S0 + pad * 2, vh = Math.max(L, y) * S0 + pad * 2;
+  return `<svg viewBox="0 0 ${vw.toFixed(0)} ${vh.toFixed(0)}" width="100%" style="max-width:420px;background:#fff;border-radius:8px" role="img" aria-label="مخطط مبدئي ${escHtml(f.name)}">${out}<rect x="${pad}" y="${pad}" width="${(W * S0).toFixed(1)}" height="${(Math.max(L, y) * S0).toFixed(1)}" fill="none" stroke="#111" stroke-width="3"/></svg>`;
+}
+const escHtml = s => String(s).replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
+let buildOpenId = null;
+function openBuild(id){
+  const p = (S.projects || []).find(x => x.id === id); if (!p || !p.build){ toast("المقايسة مش موجودة."); return; }
+  buildOpenId = id;
+  const b = p.build, inp = b.inp, tot = buildTotal(p), BUA = inp.footprint * inp.floors;
+  // editable inputs → recompute quantities (keeps prices of same-named items)
+  const num = (v, ph, w = 90) => h("input",{class: "voice-select", type: "number", inputmode: "decimal", dir: "ltr", value: v == null ? "" : String(v), placeholder: ph, style: `max-width:${w}px`});
+  const fA = num(inp.footprint, "م² للدور"), fN = num(inp.floors, "أدوار", 70), fW = num(inp.w, "العرض م", 80), fL = num(inp.l, "العمق م", 80), fB = num(b.beds, "غرف", 70), fT = num(b.baths, "حمامات", 70);
+  const fLv = h("select",{class: "voice-select"}, Object.entries(BUILD_LEVELS).map(([k, v]) => h("option",{value: k, selected: k === inp.level || null}, v)));
+  const fG = h("input",{class: "voice-select", placeholder: "المحافظة (اختياري)", value: inp.gov || ""});
+  const fNeeds = h("textarea",{class: "voice-select", rows: "2", placeholder: "احتياجاتك: مثلاً شقة لكل دور، ريسبشن كبير، أوضة ماستر بحمام، جراج…"}, inp.needs || "");
+  const recompute = () => {
+    const ni = {...inp, footprint: +fA.value || inp.footprint, floors: Math.min(10, Math.max(1, +fN.value || inp.floors)), w: +fW.value || null, l: +fL.value || null, bedrooms: +fB.value || null, baths: +fT.value || null, level: fLv.value, gov: fG.value.trim(), needs: fNeeds.value.trim()};
+    const q = buildQuantities(ni), old = new Map(p.items.map(i => [i.name, i]));
+    p.items = q.items.map(i => { const o = old.get(i.name); return o ? {...i, price: o.price, source: o.source, url: o.url, asOf: o.asOf, checked: o.checked} : i; });
+    p.build.inp = ni; p.build.beds = q.beds; p.build.baths = q.baths;
+    p.name = buildTitle(ni); store.save(); render(); openBuild(id); toast("اتحسبت من جديد ✓");
+  };
+  const groups = BUILD_GROUPS.map(g => {
+    const rows = p.items.filter(i => i.group === g); if (!rows.length) return null;
+    const sub = rows.reduce((a, i) => a + (i.price || 0) * i.qty, 0);
+    return h("details",{class: "card", style: "padding:8px;margin:4px 0", open: true}, h("summary",{}, h("b",{}, g), h("span",{class: "sub", style: "margin-inline-start:8px"}, sub ? fmtMoney(sub) : "")),
+      h("ul",{class: "plain"}, rows.map(i => h("li",{style: "margin:6px 0"},
+        h("div",{}, h("b",{style: "font-weight:500"}, i.name)),
+        h("div",{class: "sub"}, `${fmtN(i.qty)} ${i.unit} × ${i.price ? fmtMoney(i.price) : "؟"} = ${i.price ? fmtMoney(i.price * i.qty) : "—"}`,
+          h("button",{class: "link-btn", style: "color:var(--breeze);margin-inline-start:6px", onclick: () => { const v = prompt(`سعر ${i.name} لكل ${i.unit} (جنيه):`, i.price || ""); if (v === null) return; const n0 = toNumber(v); if (n0 > 0){ i.price = n0; i.source = "سعرك"; i.url = null; i.asOf = localISO(new Date()).slice(0, 10); i.checked = false; store.save(); openBuild(id); } }}, "سعر")),
+        i.source ? h("div",{class: "sub"}, i.url ? h("a",{href: i.url, target: "_blank", rel: "noopener"}, `المصدر: ${i.source}`) : `المصدر: ${i.source}`, i.asOf ? ` • ${dayAr(i.asOf)}` : "", i.checked ? " ✓ اتزار فعلاً" : "") : null,
+        h("div",{class: "sub", style: "opacity:.75"}, "الحساب: " + i.how)))));
+  }).filter(Boolean);
+  const d = b.design, design = h("div",{class: "card", style: "padding:8px;margin-top:8px"}, h("b",{}, "🏠 تصميم مبدئي مقترح"));
+  if (d){
+    if (d.concept) design.append(h("p",{}, d.concept));
+    for (const f of d.floors){ const box = h("div",{style: "margin:8px 0"}, h("div",{class: "sub"}, f.name)); box.insertAdjacentHTML("beforeend", buildPlanSVG(d, f)); design.append(box); }
+    if (d.tips && d.tips.length) design.append(h("ul",{class: "plain"}, d.tips.map(t => h("li",{}, "💡 " + t))));
+    if (d.code && d.code.length) design.append(h("ul",{class: "plain"}, d.code.map(t => h("li",{}, "📋 " + t))));
+    design.append(h("div",{class: "att-note"}, `مخطط تخطيطي مش بمقياس رسم${d.provider && window.NASEM_APP ? " • اقترحه " + window.NASEM_APP.PROVIDER_NAMES[d.provider] : ""}. الرسومات التنفيذية والترخيص من مكتب هندسي معتمد.`));
+  } else design.append(h("div",{class: "att-note"}, "اكتب احتياجاتك فوق (عدد الغرف، شقة لكل دور، جراج…) واضغط الزرار، والمعماري الذكي يقترح توزيع الأدوار بالمقاسات."));
+  design.append(h("button",{class: "btn ghost", onclick: e => buildDesign(p, e.currentTarget)}, d ? "🔁 اقترح تصميم تاني" : "✏️ اقترح تصميم"));
+  const txt = () => buildReportText(p);
+  sheet.replaceChildren(h("h2",{id: "sheetTitle"}, "📐 " + p.name),
+    h("div",{class: "card", style: "padding:10px"},
+      h("div",{style: "font-size:1.25em"}, h("b",{}, tot ? fmtMoney(tot * 1.1) : "لسه من غير أسعار")),
+      h("div",{class: "sub"}, tot ? `شامل 10% احتياطي • المتر حوالي ${fmtMoney(tot * 1.1 / BUA)} • المسطح ${fmtN(BUA)} م²` : `المسطح ${fmtN(BUA)} م² • اضغط "حدّث الأسعار"`),
+      p.prevTotal && tot && Math.abs(tot - p.prevTotal) > 1 ? h("div",{class: "sub", style: `color:${tot > p.prevTotal ? "var(--danger)" : "var(--breeze)"}`}, `${tot > p.prevTotal ? "غليت" : "رخصت"} ${fmtMoney(Math.abs(tot - p.prevTotal))} عن آخر تسعير`) : null,
+      h("div",{class: "row", style: "flex-wrap:wrap;margin-top:6px"},
+        h("button",{class: "btn primary", onclick: e => buildPrices(p, e.currentTarget)}, p.updatedAt ? "🔄 حدّث الأسعار" : "💰 هات أسعار النهاردة"),
+        h("button",{class: "btn ghost", onclick: () => printReport(txt())}, "📄 تقرير PDF"),
+        h("button",{class: "btn ghost", onclick: () => openUrl(waLink(null, txt()))}, "واتساب"),
+        h("button",{class: "btn ghost", onclick: () => copyText(txt())}, "انسخ"))),
+    h("details",{class: "card", style: "padding:8px;margin-top:6px"}, h("summary",{}, "⚙️ البيانات (عدّل واحسب تاني)"),
+      h("div",{class: "row", style: "flex-wrap:wrap;gap:6px"}, fA, fN, fW, fL, fB, fT), fLv, fG, fNeeds,
+      h("button",{class: "btn ghost", onclick: recompute}, "احسب تاني")),
+    ...groups, design,
+    h("p",{class: "att-note"}, "الكميات بمعدلات استرشادية للمباني السكنية الخرسانية، والأسعار من النت بمصادرها. التصميم الإنشائي والكميات النهائية من مهندس إنشائي معتمد، والبناء محتاج ترخيص."),
+    h("div",{class: "row"}, h("button",{class: "btn ghost", onclick: () => { buildOpenId = null; closeSheet(); }}, "تمام")));
+  sheetBack.hidden = false;
+  if (!p.updatedAt && !p.autoPriced){ p.autoPriced = true; setTimeout(() => buildPrices(p, null), 300); }
+}
 
 /* ---------------- misc ---------------- */
 let toastTimer;
