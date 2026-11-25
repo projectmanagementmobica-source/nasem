@@ -2650,9 +2650,10 @@ function cloudVoiceSettings(){
 
 /* ---------------- identity: "تعرّف على نسيم" ---------------- */
 const APP = {
-  name: "نسيم", nameLatin: "NASEM AI", version: "إصدار 5.0 (تطبيق)",
+  name: "نسيم", nameLatin: "NASEM AI", version: "إصدار 5.1 (تطبيق)",
   updated: "2026-11-25",
   changes: [
+    "🛟 لو بحث جوجل المجاني خلص، نسيم بيكمّل بمعرفة الذكاء ويقولك بوضوح إن مفيش مصادر حديثة",
     "📊 دراسات الجدوى، واقترح عليّ مشروع حسب رأس مالك والسوق",
     "🧊 مجسم 3D للبيت بعد التشطيب: لف حواليه، ادخل جواه، افرش وغيّر الألوان",
     "📐 مقايسة البناء: كميات من الحفر للتشطيب، وأسعار النهاردة بمصادرها، وتصميم مبدئي",
@@ -4727,6 +4728,7 @@ Items:
 ${list}`;
   try{
     const raw = await sample.json(prompt, {modelTier:"default", webSearch:true, cache:false});
+    if (raw && raw._no_search){ toast("البحث على النت وصل لحده المجاني النهارده، ومش هحط أسعار من غير مصدر. جرّب بكرة أو اكتب السعر بإيدك."); return; }
     const got = Array.isArray(raw && raw.prices) ? raw.prices : [];
     const before = projTotal(p); let n = 0, maxCh = 0, driver = null;
     for (const i of p.items){
@@ -4853,6 +4855,7 @@ Items:
 ${list}`;
   try{
     const raw = await sample.json(prompt, {modelTier: "default", webSearch: true, cache: false});
+    if (raw && raw._no_search){ toast("البحث على النت وصل لحده المجاني النهارده، ومش هحط أسعار من غير مصدر. جرّب بكرة أو اكتب السعر بإيدك."); return; }
     const got = Array.isArray(raw && raw.prices) ? raw.prices : [];
     const verified = new Set(((raw && raw._sources) || []).map(x => hostOf(x.url)).filter(Boolean));
     const before = buildTotal(p); let k = 0;
@@ -5093,6 +5096,7 @@ Reply with ONLY one JSON object, all text in simple Egyptian Arabic:
       success: arr(raw.success_factors, 8).map(x => str(x, 160)), steps: arr(raw.first_steps, 6).map(x => str(x, 160)),
       sources: mergeSources(arr(raw.sources, 12).filter(x => x && /^https?:\/\//.test(x.url || "")).map(x => ({url: x.url, title: str(x.title, 120)})), raw._sources)};
     if (!d.products.length || !d.capex.length) throw new Error("incomplete study");
+    d.noSearch = !!raw._no_search;
     st.data = d; st.state = "ready"; st.updatedAt = nowISO(); st.provider = window.NASEM_APP ? window.NASEM_APP.state.lastProvider : null;
     toast("دراسة الجدوى جاهزة ✓");
   }catch(e){ console.warn(e); st.state = st.data ? "ready" : "failed"; toast("ما قدرتش أكمّل الدراسة دلوقتي. جرّب تاني."); }
@@ -5114,7 +5118,7 @@ Give 4 or 5 ideas.`;
     const ideas = (Array.isArray(raw.ideas) ? raw.ideas : []).slice(0, 6).filter(x => x && x.name);
     if (!ideas.length) throw new Error("no ideas");
     const src = mergeSources((raw.sources || []).filter(x => x && /^https?:\/\//.test(x.url || "")), raw._sources).list;
-    S.feasLastSuggest = {q, at: nowISO(), note: String(raw.market_note || "").slice(0, 400), ideas: ideas.map(x => ({name: String(x.name).slice(0, 80), why: String(x.why || "").slice(0, 300),
+    S.feasLastSuggest = {noSearch: !!raw._no_search, q, at: nowISO(), note: String(raw.market_note || "").slice(0, 400), ideas: ideas.map(x => ({name: String(x.name).slice(0, 80), why: String(x.why || "").slice(0, 300),
       cmin: toNumber(x.capital_min) || null, cmax: toNumber(x.capital_max) || null, profit: String(x.monthly_profit || "").slice(0, 60), payback: toNumber(x.payback_months) || null,
       diff: String(x.difficulty || "").slice(0, 10), fit: Math.max(0, Math.min(100, toNumber(x.fit) || 0)), crit: (x.success_criteria || []).slice(0, 6).map(c => String(c).slice(0, 140)),
       risks: (x.risks || []).slice(0, 4).map(c => String(c).slice(0, 140)), steps: (x.first_steps || []).slice(0, 4).map(c => String(c).slice(0, 140))})).sort((a, b) => b.fit - a.fit), sources: src};
@@ -5124,7 +5128,7 @@ Give 4 or 5 ideas.`;
 }
 function feasIdeasView(out){
   const r = S.feasLastSuggest; if (!r) return;
-  out.replaceChildren(r.note ? h("p",{}, "📈 " + r.note) : "", ...r.ideas.map((x, i) => h("div",{class: "card", style: "padding:10px;margin:6px 0"},
+  out.replaceChildren(r.noSearch ? h("div",{class: "att-note", style: "color:#b7791f"}, "⚠️ البحث على النت وصل لحده المجاني دلوقتي، فالاقتراحات دي من معرفة الذكاء من غير مصادر حديثة. جرّب تاني بكرة عشان تتبني على السوق.") : "", r.note ? h("p",{}, "📈 " + r.note) : "", ...r.ideas.map((x, i) => h("div",{class: "card", style: "padding:10px;margin:6px 0"},
     h("div",{class: "row", style: "justify-content:space-between;align-items:center"}, h("b",{}, `${fmtN(i + 1)}. ${x.name}`), h("span",{class: "chip"}, `مناسب لك ${fmtN(x.fit)}%`)),
     x.why ? h("div",{class: "sub"}, "ليه: " + x.why) : null,
     h("div",{class: "sub"}, [x.cmin ? `رأس المال ${fmtMoney(x.cmin)}${x.cmax ? " – " + fmtMoney(x.cmax).replace(" جنيه", "") : ""}` : null, x.profit ? `ربح شهري ${x.profit}` : null, x.payback ? `يرجّع فلوسه في ~${fmtN(x.payback)} شهر` : null, x.diff ? `الصعوبة: ${x.diff}` : null].filter(Boolean).join(" • ")),
@@ -5198,6 +5202,7 @@ function openFeas(id){
     h("div",{style: `height:${Math.round(Math.abs(y.net) / maxY * 70)}px;background:${y.net >= 0 ? "var(--breeze)" : "var(--danger)"};border-radius:6px 6px 0 0`}), h("div",{class: "sub"}, `س${fmtN(i + 1)}`))));
   const txt = () => feasReportText(st);
   sheet.replaceChildren(head,
+    d.noSearch ? h("div",{class: "card", style: "padding:8px;border-inline-start:4px solid #b7791f"}, "⚠️ البحث على النت كان وصل لحده المجاني وقت الدراسة، فالأرقام دي تقديرات الذكاء من غير مصادر حديثة. اضغط \"🔄 حدّث الدراسة\" بكرة عشان تتبني على السوق.") : null,
     h("div",{class: "card", style: `padding:10px;border-inline-start:4px solid ${vc}`}, h("b",{style: `color:${vc}`}, vt), d.summary ? h("p",{style: "margin:6px 0 0"}, d.summary) : null,
       M.overCapital ? h("div",{class: "sub", style: "color:var(--danger)"}, `المطلوب ${fmtMoney(M.invest)} أكتر من رأس مالك ${fmtMoney(st.capital)}.`) : null),
     h("div",{style: "display:flex;flex-wrap:wrap;gap:6px;margin:6px 0"},

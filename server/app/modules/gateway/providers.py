@@ -222,27 +222,44 @@ class GeminiProvider:
         if not models:
             raise LLMUnavailableError("all free Gemini models are used up for today", retryable=False)
         http = self._http or httpx.AsyncClient(timeout=settings.gateway_timeout_seconds)
-        try:
+        key = settings.gemini_api_key.get_secret_value()
+
+        async def attempt(payload: dict[str, Any]) -> httpx.Response:
+            res: httpx.Response | None = None
             for model in models:
+                if model in _gemini_exhausted_today():
+                    continue
                 try:
                     res = await http.post(
                         f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
-                        headers={"x-goog-api-key": settings.gemini_api_key.get_secret_value()},
-                        json=body,
+                        headers={"x-goog-api-key": key},
+                        json=payload,
                     )
                 except httpx.HTTPError as exc:
                     raise LLMUnavailableError(f"gemini connection: {exc}", retryable=True) from exc
-                if res.status_code == 429 and "PerDay" in res.text:
+                if res.status_code == 429 and "PerDay" in res.text and "tools" not in payload:
                     _mark_gemini_exhausted(model)        # this model is out for today -> next one
                     continue
                 if res.status_code == 404:
                     continue                             # model id not available -> next one
-                if res.status_code in (429, 500, 502, 503, 504) and model != models[-1]:
-                    log.warning("gemini %s busy (%s), trying next model", model, res.status_code)
+                if res.status_code in (429, 500, 502, 503, 504):
+                    log.warning("gemini %s busy (%s): %s", model, res.status_code, res.text[:240].replace("\n", " "))
                     continue                             # overloaded / rate-limited -> next model
-                break
-            else:
+                return res
+            if res is None:
                 raise LLMUnavailableError("all free Gemini models are used up for today", retryable=False)
+            return res
+
+        no_search = False
+        try:
+            res = await attempt(body)
+            if res.status_code == 429 and "tools" in body:
+                # The free Google Search grounding quota is separate from (and smaller than) plain generation:
+                # answer from the model's own knowledge instead of failing, and say so.
+                log.warning("gemini web search quota hit, answering without search")
+                body = {"contents": body["contents"], "generationConfig": {"responseMimeType": "application/json"}}
+                res = await attempt(body)
+                no_search = True
         finally:
             if self._http is None:
                 await http.aclose()
@@ -254,6 +271,8 @@ class GeminiProvider:
         result = parse_json_object(text)
         if "tools" in body:
             result["_sources"], result["_queries"] = gemini_sources(cand)
+        elif no_search:
+            result["_no_search"] = True
         return result
 
 
