@@ -51,9 +51,9 @@ class Settings(BaseSettings):
     openai_model_main: str = ""
     openai_model_quick: str = ""
     gemini_api_key: SecretStr | None = None
-    gemini_model_main: str = "gemini-3.5-flash"
+    gemini_model_main: str = "gemini-3.6-flash"
     # Each free Gemini model has its own small daily quota: tried in order when one is used up.
-    gemini_fallback_models: list[str] = ["gemini-3.6-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite"]
+    gemini_fallback_models: list[str] = ["gemini-3.8-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.5-flash"]
     groq_api_key: SecretStr | None = None   # free tier, no card: console.groq.com/keys
     groq_model_main: str = "openai/gpt-oss-120b"
     groq_model_quick: str = "llama-3.3-70b-versatile"

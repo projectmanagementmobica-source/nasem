@@ -12,6 +12,7 @@ from typing import Any, Literal, Protocol
 
 import httpx
 import logging
+import re
 from anthropic import AsyncAnthropic
 
 from app.core.config import settings
@@ -237,6 +238,9 @@ class GeminiProvider:
                     )
                 except httpx.HTTPError as exc:
                     raise LLMUnavailableError(f"gemini connection: {exc}", retryable=True) from exc
+                if res.status_code == 429 and "tools" not in payload and re.search(r"limit:\s*0\b", res.text):
+                    _mark_gemini_exhausted(model)        # no free quota at all for this model on this key -> skip it today
+                    continue
                 if res.status_code == 429 and "PerDay" in res.text and "tools" not in payload:
                     _mark_gemini_exhausted(model)        # this model is out for today -> next one
                     continue
