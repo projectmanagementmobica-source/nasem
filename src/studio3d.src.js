@@ -123,6 +123,9 @@ export function open(opts) {
   const sun = new THREE.DirectionalLight("#fff6e5", 2.2); sun.position.set(-18, 30, 14); sun.castShadow = true; sun.shadow.mapSize.set(1024, 1024);
   const sc = Math.max(layout.W, layout.L) * 0.9 + 6; Object.assign(sun.shadow.camera, { left: -sc, right: sc, top: sc, bottom: -sc, near: 1, far: 100 }); scene.add(sun);
   const cx = layout.W / 2, cz = layout.L / 2; sun.target.position.set(cx, 0, cz); scene.add(sun.target);
+  { const order = ["N", "E", "S", "W"], fi0 = order.indexOf(layout.facing || "N"); const vec = { front: [0, 1], right: [1, 0], back: [0, -1], left: [-1, 0] };
+    const sideFacingS = ["front", "right", "back", "left"].find((k, i) => order[(fi0 + i) % 4] === "S"), sideFacingW = ["front", "right", "back", "left"].find((k, i) => order[(fi0 + i) % 4] === "W");
+    const [sx, sz] = vec[sideFacingS], [wx, wz] = vec[sideFacingW]; sun.position.set(cx + sx * 22 + wx * 8, 30, cz + sz * 22 + wz * 8); }
   // ground + street
   const ground = new THREE.Mesh(new THREE.PlaneGeometry(200, 200), mat("#9bb37f")); ground.rotation.x = -Math.PI / 2; ground.position.set(cx, -0.01, cz); ground.receiveShadow = true; scene.add(ground);
   const walkway = box(layout.W + 4, 0.02, 3, mat("#c9c3b6"), cx, 0.0, layout.L + 1.5); walkway.castShadow = false; scene.add(walkway);
@@ -141,9 +144,25 @@ export function open(opts) {
     return (roomMats[k] = m);
   }
   const onEdge = (a, b) => Math.abs(a - b) < 0.05;
+  const SIDES = layout.sides || { front: "street", back: "open", right: "open", left: "open" };
+  const sideOf = (sd) => (sd.horiz ? (sd.line > 0.05 ? "front" : "back") : (sd.line > 0.05 ? "right" : "left"));
+  const neighbourSide = (sd) => SIDES[sideOf(sd)] === "neighbor";
+  { const rd = mat("#4a4f54"), pv = mat("#c9c3b6"), add = (w, d, x, z) => { const m = box(w, 0.02, d, rd, x, 0, z); m.castShadow = false; scene.add(m); };
+    if (SIDES.right === "street") { add(7, layout.L + 40, layout.W + 6.5, cz); const k = box(3, 0.02, layout.L + 4, pv, layout.W + 1.5, 0, cz); k.castShadow = false; scene.add(k); }
+    if (SIDES.left === "street") { add(7, layout.L + 40, -6.5, cz); const k = box(3, 0.02, layout.L + 4, pv, -1.5, 0, cz); k.castShadow = false; scene.add(k); }
+    if (SIDES.back === "street") add(layout.W + 40, 7, cx, -6.5);
+    // neighbours: simple grey masses so blank walls make sense
+    const nb = mat("#d6d2ca", { t: 0.35 }), mass = (w, d, x, z) => scene.add(box(w, layout.floors.length * H + 1.5, d, nb, x, (layout.floors.length * H + 1.5) / 2, z));
+    if (SIDES.right === "neighbor") mass(8, layout.L, layout.W + 4.3, cz); if (SIDES.left === "neighbor") mass(8, layout.L, -4.3, cz); if (SIDES.back === "neighbor") mass(layout.W, 8, cx, -4.3); }
+  // light wells (منور): open to the sky, no floor finish
+  const isWell = (n) => /منور|مسقط نور|بير سلم نور/.test(n);
   // spanning tree of doors: from the biggest living room
   function doorsFor(rooms) {
-    const doors = []; const hub = rooms.reduce((best, r, i) => (/ريسبشن|صال|معيش|استقبال/.test(r.name) ? i : best), rooms.reduce((bi, r, i, a) => (r.w * r.h > a[bi].w * a[bi].h ? i : bi), 0));
+    const doors = [];
+    const living = rooms.map((r, i) => i).filter((i) => /ريسبشن|صال|معيش|استقبال|ليفنج/.test(rooms[i].name));
+    const front = (i) => Math.abs(rooms[i].y + rooms[i].h - layout.L) < 0.05;
+    const biggest = (ids) => ids.reduce((bi, i) => (rooms[i].w * rooms[i].h > rooms[bi].w * rooms[bi].h ? i : bi), ids[0]);
+    const hub = living.length ? biggest(living.filter(front).length ? living.filter(front) : living) : biggest(rooms.map((r, i) => i));
     const seen = new Set([hub]), q = [hub];
     const shared = (a, b) => {
       const A = rooms[a], B = rooms[b];
@@ -187,7 +206,9 @@ export function open(opts) {
     const ceil = new THREE.Mesh(new THREE.PlaneGeometry(layout.W, layout.L), mat("#fbfaf7", { r: 1 })); ceil.rotation.x = Math.PI / 2; ceil.position.set(cx, y0 + H - SLAB - 0.01, cz); ceil.visible = false; ceil.userData.ceiling = true; g.add(ceil); ceilings.push(ceil);
     const { doors, hub } = doorsFor(f.rooms);
     if (fi === 0) {
-      const R = f.rooms, ext = (r) => [{ line: r.y + r.h, horiz: true, ok: onEdge(r.y + r.h, layout.L) }, { line: r.y, horiz: true, ok: onEdge(r.y, 0) }, { line: r.x, horiz: false, ok: onEdge(r.x, 0) }, { line: r.x + r.w, horiz: false, ok: onEdge(r.x + r.w, layout.W) }].filter((e) => e.ok);
+      const rank = { street: 0, open: 1, neighbor: 9 };
+      const R = f.rooms, ext = (r) => [{ line: r.y + r.h, horiz: true, ok: onEdge(r.y + r.h, layout.L) }, { line: r.y, horiz: true, ok: onEdge(r.y, 0) }, { line: r.x, horiz: false, ok: onEdge(r.x, 0) }, { line: r.x + r.w, horiz: false, ok: onEdge(r.x + r.w, layout.W) }]
+        .filter((e) => e.ok && SIDES[sideOf(e)] !== "neighbor").sort((a, b) => rank[SIDES[sideOf(a)]] - rank[SIDES[sideOf(b)]] || (sideOf(a) === "front" ? -1 : 1));
       const hx = ext(R[hub]); let ri = hub, e = hx[0];
       if (!e) { ri = R.findIndex((r) => !/سلم|درج|حمام/.test(r.name) && onEdge(r.y + r.h, layout.L)); if (ri < 0) ri = 0; e = ext(R[ri])[0]; }
       if (e) { const r = R[ri]; entrance = { ri, ...e, cx: e.horiz ? r.x + r.w / 2 : e.line, cz: e.horiz ? e.line : r.y + r.h / 2 }; }
@@ -195,6 +216,7 @@ export function open(opts) {
     f.rooms.forEach((r, ri) => {
       const key = fi + ":" + ri;
       // floor finish
+      if (isWell(r.name)) { const gr = box(r.w - 0.05, 0.02, r.h - 0.05, mat("#9a9488"), r.x + r.w / 2, y0 + 0.01, r.y + r.h / 2); gr.castShadow = false; g.add(gr); }
       const fm = roomMat(key, "floor"); const fl = new THREE.Mesh(new THREE.PlaneGeometry(r.w - 0.02, r.h - 0.02), fm); fl.rotation.x = -Math.PI / 2; fl.position.set(r.x + r.w / 2, y0 + 0.012, r.y + r.h / 2); fl.receiveShadow = true;
       fm.map.repeat.set(r.w / 0.6, r.h / 0.6); fl.userData = { kind: "floor", key }; g.add(fl); pickables.push(fl);
       if (/سلم|درج/.test(r.name)) { const sm = mat("#d9d0c1"); const steps = 18, run = Math.max(r.h, r.w) * 0.85 / steps, along = r.h >= r.w; for (let s = 0; s < steps; s++) { const st = along ? box(Math.min(1.1, r.w * 0.9), (s + 1) * (H / steps), run, sm, r.x + r.w / 2, y0 + (s + 1) * (H / steps) / 2, r.y + 0.2 + s * run + run / 2) : box(run, (s + 1) * (H / steps), Math.min(1.1, r.h * 0.9), sm, r.x + 0.2 + s * run + run / 2, y0 + (s + 1) * (H / steps) / 2, r.y + r.h / 2); g.add(st); } }
@@ -209,7 +231,7 @@ export function open(opts) {
         if (sd.ext) {
           const len = sd.to - sd.from;
           if (fi === 0 && entrance && entrance.ri === ri && entrance.line === sd.line && entrance.horiz === sd.horiz) ops.push({ c: (sd.from + sd.to) / 2, w: 1.2, bottom: 0, top: 2.3 });          // main entrance
-          else if (!/سلم|درج/.test(r.name) && len > 1.4) ops.push({ c: (sd.from + sd.to) / 2, w: Math.min(/حمام/.test(r.name) ? 0.6 : 1.6, len * 0.45), bottom: /حمام/.test(r.name) ? 1.6 : 0.95, top: 2.25, glass: true });
+          else if (!/سلم|درج/.test(r.name) && len > 1.4 && !neighbourSide(sd)) ops.push({ c: (sd.from + sd.to) / 2, w: Math.min(/حمام/.test(r.name) ? 0.6 : 1.6, len * 0.45), bottom: /حمام/.test(r.name) ? 1.6 : 0.95, top: 2.25, glass: true });
           // facade skin outside
           const t = 0.06, off = sd.horiz ? (sd.line === 0 ? -t / 2 : t / 2) : (sd.line === 0 ? -t / 2 : t / 2);
           wallSeg(g, sd.horiz, sd.line + off, sd.from, sd.to, y0, ops, facadeMat, t, "facade");
@@ -405,7 +427,8 @@ export async function shots(opts) {
   const st = open({ ...opts, headless: true, onSave: null }), c = st.ctl, out = [];
   const Lo = opts.layout, hgt = Lo.floors.length * H, fit = Math.max(Lo.W * 0.95, hgt * 1.7, 8);
   const reach = Math.hypot(Lo.W, Lo.L) / 2;   // camera distance is measured from the building centre
-  const views = [{ theta: 0, phi: 1.38, r: Lo.L / 2 + fit * 1.15 + 4 }, { theta: -0.7, phi: 1.2, r: reach + fit * 1.2 + 4 }, { theta: 0.65, phi: 0.8, r: reach + fit * 1.35 + 5 }];
+  const sd0 = Lo.sides || {}, corner = sd0.right === "street" || (sd0.right !== "neighbor" && sd0.left === "neighbor") ? 0.7 : -0.7;
+  const views = [{ theta: 0, phi: 1.38, r: Lo.L / 2 + fit * 1.15 + 4 }, { theta: corner, phi: 1.2, r: reach + fit * 1.2 + 4 }, { theta: -corner * 0.9, phi: 0.8, r: reach + fit * 1.35 + 5 }];
   await wait(150);
   for (const v of views) { Object.assign(c.orbit, v, { ty: hgt * 0.5 }); c.render(); await wait(60); c.render(); out.push(c.canvas.toDataURL("image/jpeg", 0.9)); }
   st.close(); return out;

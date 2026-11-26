@@ -2677,9 +2677,10 @@ function cloudVoiceSettings(){
 
 /* ---------------- identity: "تعرّف على نسيم" ---------------- */
 const APP = {
-  name: "نسيم", nameLatin: "NASEM AI", version: "إصدار 5.9 (تطبيق)",
+  name: "نسيم", nameLatin: "NASEM AI", version: "إصدار 6.0 (تطبيق)",
   updated: "2026-11-25",
   changes: [
+    "🧭 التصميم الإنشائي بقى ياخد أطوال الأرض الأربعة، وكل جنب عليه شارع ولا جار، واتجاه الواجهة (بحري/قبلي/شرقي/غربي)، والمعماري الذكي بيحط الأوض بنفسه ويعمل منور لو لازم",
     "🏗️ التصميم الإنشائي والمقايسة بقوا ليهم مربعات في الاستوديو، وتقدر تقول \"فين اللوحة الإنشائية\"",
     "🏗️ التصميم الإنشائي المبدئي: ابعت أبعاد الأرض، يطلع لوحة أعمدة وقواعد ولوحة سقف بجداول التسليح (PDF A3)، وصورة الواجهة، وفيديو برّه وجوه",
     "🔘 الشات مربوط بمفاتيح نسيم: اطلب أي ميزة بالكلام (البصمة، الجمعيات، الباك أب، المجسم…) يظهر زرارها ويتفتح على طول",
@@ -4937,15 +4938,22 @@ async function buildDesign(p, btn){
   const sample = await getSample(); if (!sample){ toast("محتاج مصدر ذكاء شغال."); return; }
   const inp = p.build.inp, W = inp.w || Math.round(Math.sqrt(inp.footprint) * 10) / 10, Lg = inp.l || Math.round(inp.footprint / W * 10) / 10;
   const lab = btn ? btn.textContent : ""; if (btn){ btn.disabled = true; btn.textContent = "المعماري بيفكر…"; }
-  const prompt = `You are an award-winning Egyptian residential architect. Propose a practical conceptual layout.
-Plot/footprint per floor: ${W} m wide × ${Lg} m deep (${inp.footprint} m²), floors: ${inp.floors}, finishing: ${BUILD_LEVELS[inp.level]}.
+  const sides = plotSides(inp), dirs = sideFacing(inp.facing || "N"), DIRN = {N: "north", S: "south", E: "east", W: "west"};
+  const sideTxt = ["front", "back", "right", "left"].map(k => `${k} side (faces ${DIRN[dirs[k]]}): ${sides[k] === "street" ? `STREET${inp.streetW && inp.streetW[k] ? ` ${inp.streetW[k]} m wide` : ""}` : sides[k] === "neighbor" ? "NEIGHBOUR building (blank wall, no windows allowed)" : "open land / garden"}`).join("; ");
+  const prompt = `You are a world-class Egyptian residential architect (Egyptian Unified Building Law 119/2008 practice). Design the BEST practical layout for this plot and place every room yourself.
+Building footprint per floor: ${W} m wide (x from left=0 to right=${W}) × ${Lg} m deep (y from back=0 to front=${Lg}; the front at y=${Lg} is the main street side). Floors: ${inp.floors}. Finishing: ${BUILD_LEVELS[inp.level]}.
+Plot: front width ${inp.plotW || W} m, back width ${inp.plotWb || inp.plotW || W} m, right side ${inp.plotLr || inp.plotL || Lg} m, left side ${inp.plotLl || inp.plotLr || inp.plotL || Lg} m; setbacks front ${inp.front || 0} m, back ${inp.back || 0} m, sides ${inp.side || 0} m.
+Surroundings: ${sideTxt}.
+Think like an architect before answering: entrance and stairs on a street side, reception/living with the street windows, bedrooms on the quiet side with windows only toward streets/open land or a light well (منور ≥ 3×3 m inside the footprint when rooms would otherwise have no window — required when 3 sides are neighbours), kitchens and bathrooms on light wells or ventilated walls, north/north-west breeze for bedrooms, avoid west sun on living rooms, no windows on neighbour walls, the same stairs position on every floor, structural grid friendly (column spans ≤ 5.5 m).
 Owner's needs (Arabic, may be short): """${String(inp.needs || "").slice(0, 400)}""" ; bedrooms total ≈ ${p.build.beds}, bathrooms ≈ ${p.build.baths}.
 Rules: Egyptian family living (reception/ريسبشن near entrance, kitchen ventilated, bedrooms private, master with bathroom if possible), stairs on every floor (≈ 2.5×5 m), natural light and cross ventilation for Egypt's climate (north-facing windows preferred), room areas must add up to about 90% of the floor (walls take the rest). Use realistic room sizes in meters.
-Reply with ONLY JSON: {"concept":"<2 sentences in Egyptian Arabic>","floors":[{"name":"<Arabic floor name>","rooms":[{"name":"<Arabic room name>","w":<m>,"l":<m>}]}],"tips":["<short Arabic tip>", ...max 5],"code_notes":["<Arabic note about Egyptian building code / permits / setbacks to check>", ...max 3]}`;
+Reply with ONLY JSON: {"concept":"<2 sentences in Egyptian Arabic explaining the main design choices>","floors":[{"name":"<Arabic floor name>","rooms":[{"name":"<Arabic room name, use منور for a light well>","x":<m from left>,"y":<m from back>,"w":<m along x>,"l":<m along y>}]}],"tips":["<short Arabic tip>", ...max 5],"code_notes":["<Arabic note about Egyptian building code / permits / setbacks to check>", ...max 3]}`;
   try{
     const raw = await sample.json(prompt, {modelTier: "default", cache: false});
     const floors = Array.isArray(raw && raw.floors) ? raw.floors.slice(0, 10).map(f => ({name: String(f.name || "دور").slice(0, 40),
-      rooms: (Array.isArray(f.rooms) ? f.rooms : []).slice(0, 16).map(r => ({name: String(r.name || "غرفة").slice(0, 30), w: Math.max(1, Math.min(30, toNumber(r.w) || 3)), l: Math.max(1, Math.min(30, toNumber(r.l) || 3))}))})).filter(f => f.rooms.length) : [];
+      rooms: (Array.isArray(f.rooms) ? f.rooms : []).slice(0, 18).map(r => ({name: String(r.name || "غرفة").slice(0, 30), w: Math.max(1, Math.min(30, toNumber(r.w) || 3)), l: Math.max(1, Math.min(30, toNumber(r.l) || 3)),
+        ...(r.x != null && r.y != null ? {x: Math.max(0, toNumber(r.x) || 0), y: Math.max(0, toNumber(r.y) || 0)} : {})}))})).filter(f => f.rooms.length) : [];
+    floors.forEach(f => { f.placed = archPlacementOk(f.rooms, W, Lg); });
     if (!floors.length) throw new Error("empty design");
     p.build.design = {scene: null, W, L: Lg, concept: String(raw.concept || "").slice(0, 400), floors, tips: (raw.tips || []).slice(0, 5).map(x => String(x).slice(0, 200)),
       code: (raw.code_notes || []).slice(0, 3).map(x => String(x).slice(0, 200)), at: nowISO(), provider: window.NASEM_APP ? window.NASEM_APP.state.lastProvider : null};
@@ -4953,8 +4961,21 @@ Reply with ONLY JSON: {"concept":"<2 sentences in Egyptian Arabic>","floors":[{"
   }catch(e){ console.warn(e); toast("ما قدرتش أجهز التصميم دلوقتي. جرّب تاني."); }
   finally{ if (btn){ btn.disabled = false; btn.textContent = lab; } store.save(); if (buildOpenId === p.id && structOpenId !== p.id) openBuild(p.id); }
 }
+/* Accept the architect's own room positions when they fit the footprint and barely overlap. */
+function archPlacementOk(rooms, W, L){
+  if (!rooms.every(r => r.x != null && r.y != null)) return false;
+  let area = 0, over = 0;
+  for (const r of rooms){ if (r.x < -0.3 || r.y < -0.3 || r.x + r.w > W + 0.3 || r.y + r.l > L + 0.3) return false; area += r.w * r.l; }
+  for (let i = 0; i < rooms.length; i++) for (let j = i + 1; j < rooms.length; j++){ const a = rooms[i], b = rooms[j];
+    over += Math.max(0, Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x)) * Math.max(0, Math.min(a.y + a.l, b.y + b.l) - Math.max(a.y, b.y)); }
+  return area > W * L * 0.6 && over < W * L * 0.04;
+}
 /* Rooms packed in rows inside the footprint (meters). Shared by the 2D plan and the 3D studio. */
 function buildLayout(d, f){
+  if (f.placed){   // the architect placed the rooms: snap them to the footprint, stretch the last gaps closed
+    const cl = (v, a, b) => Math.max(a, Math.min(b, v));
+    return f.rooms.map(r => { const x = cl(r.x, 0, d.W - 1), y = cl(r.y, 0, d.L - 1); return {name: r.name, x, y, w: cl(r.w, 1, d.W - x), h: cl(r.l, 1, d.L - y), dw: r.w, dl: r.l}; });
+  }
   // Recursive bisection: split the rooms into two groups of similar area and cut the rectangle along its longer side.
   const W = d.W, L = d.L, rooms = f.rooms.map(r => ({name: r.name, dw: r.w, dl: r.l, a: Math.max(1, r.w * r.l)})), out = [];
   const cut = (rs, x, y, w, h) => {
@@ -4977,7 +4998,7 @@ async function open3D(p, btn){
   if (btn){ btn.disabled = true; btn.textContent = "بفتح المجسم…"; }
   try{
     const m = await import("./studio3d.js");
-    m.open({title: p.name, layout: {W: d.W, L: d.L, floors: d.floors.map(f => ({name: f.name, rooms: buildLayout(d, f)}))}, scene: d.scene || null,
+    m.open({title: p.name, layout: {W: d.W, L: d.L, sides: plotSides(p.build.inp), facing: p.build.inp.facing || "N", floors: d.floors.map(f => ({name: f.name, rooms: buildLayout(d, f)}))}, scene: d.scene || null,
       onSave: sc => { d.scene = sc; store.save(); }});
   }catch(e){ console.warn(e); toast("المجسم محتاج متصفح بيدعم 3D (WebGL). جرّب Chrome."); }
   finally{ if (btn){ btn.disabled = false; btn.textContent = "🧊 شوفه 3D وافرشه"; } }
@@ -5532,7 +5553,16 @@ function structDesign(p){
   const slabT = Math.max(12, Math.ceil(maxShort * 100 / 32));
   // quantities (structure only)
   const conc = cols.reduce((a, c) => a + c.bw * c.t / 1e6 * 3 * n + c.B * c.B * c.H, 0) + beams.reduce((a, bm) => a + bm.w * bm.h / 1e6 * bm.span * (n + 1), 0) + W * L * slabT / 100 * n + (xs.length * (L) + ys.length * W) * 0.25 * 0.6;
-  return {W, L, n, q, xs, ys, cols, ctypes, ftypes, beams, btypes, slabT, conc: Math.round(conc), steel: Math.round(conc * 0.1 * 10) / 10, plot: {w: +inp.plotW || W, l: +inp.plotL || L, front: +inp.front || 0, back: +inp.back || 0, side: +inp.side || 0}};
+  const fp = plotFootprint(inp), sideSb = +inp.side || 0, fr = +inp.front || 0;
+  // plot corners in "plot" axes (x along the street from front-left, d = depth from the street), then into building axes
+  const Bp = [fp.fw, 0], Dp = [0, fp.ll]; let Cp = [fp.bw, fp.rl];
+  { const dx = Bp[0] - Dp[0], dy = Bp[1] - Dp[1], dd = Math.hypot(dx, dy), r0 = fp.bw, r1 = fp.rl;
+    if (dd > 0 && dd <= r0 + r1 && dd >= Math.abs(r0 - r1)){ const a0 = (r0 * r0 - r1 * r1 + dd * dd) / (2 * dd), hh = Math.sqrt(Math.max(0, r0 * r0 - a0 * a0)), mx = Dp[0] + a0 * dx / dd, my = Dp[1] + a0 * dy / dd;
+      const c1 = [mx + hh * dy / dd, my - hh * dx / dd], c2 = [mx - hh * dy / dd, my + hh * dx / dd]; Cp = c1[1] > c2[1] ? c1 : c2; } }
+  const toB = ([px, pd]) => [px - sideSb, L + fr - pd];
+  const plotPoly = [[0, 0], Bp, Cp, Dp].map(toB);
+  return {W, L, n, q, xs, ys, cols, ctypes, ftypes, beams, btypes, slabT, conc: Math.round(conc), steel: Math.round(conc * 0.1 * 10) / 10, plotPoly, sides: plotSides(inp), streetW: inp.streetW || {}, facing: inp.facing || "N",
+    plot: {w: fp.fw, l: fp.rl, fw: fp.fw, bw: fp.bw, rl: fp.rl, ll: fp.ll, front: fr, back: +inp.back || 0, side: sideSb}};
 }
 /* when the AI architect is not available: a sensible local layout so the structure can still be drawn */
 function buildDefaultDesign(p){
@@ -5547,14 +5577,22 @@ function buildDefaultDesign(p){
 /* ---------- drawing sheets (SVG, A3 landscape 1190×842) ---------- */
 function structSheet(p, sd, kind){
   const PW = 1190, PH = 842, M = 30, planW = 760, planH = 700;
-  const sc = Math.min((planW - 120) / sd.W, (planH - 140) / sd.L), ox = M + 70, oy = M + 80;
+  const bx = [0, sd.W, ...sd.plotPoly.map(p0 => p0[0])], by = [0, sd.L, ...sd.plotPoly.map(p0 => p0[1])];
+  const minX = Math.min(...bx), maxX = Math.max(...bx), minY = Math.min(...by), maxY = Math.max(...by);
+  const sc = Math.min((planW - 150) / (maxX - minX), (planH - 170) / (maxY - minY)), ox = M + 80 - minX * sc, oy = M + 90 - minY * sc;
   const X = x => ox + x * sc, Y = y => oy + y * sc;
   let g = "";
   const t = (x, y, s, o = {}) => `<text x="${x.toFixed(1)}" y="${y.toFixed(1)}" font-size="${o.fs || 11}" text-anchor="${o.a || "middle"}" fill="${o.c || "#111"}" ${o.b ? 'font-weight="700"' : ""} ${o.rot ? `transform="rotate(${o.rot} ${x.toFixed(1)} ${y.toFixed(1)})"` : ""}>${escHtml(String(s))}</text>`;
-  // plot boundary + street
-  const pl = sd.plot, pox = -(pl.side || 0), poy = -(pl.back || 0);
-  g += `<rect x="${X(pox).toFixed(1)}" y="${Y(poy).toFixed(1)}" width="${(pl.w * sc).toFixed(1)}" height="${(pl.l * sc).toFixed(1)}" fill="none" stroke="#999" stroke-dasharray="6 4"/>`;
-  g += t(X(sd.W / 2), Y(sd.L + (pl.front || 0)) + 52, "⬇ الشارع", {fs: 12, c: "#555"});
+  // the real plot (four sides) + what is on each side + north arrow
+  const pl = sd.plot, poly = sd.plotPoly;
+  g += `<polygon points="${poly.map(([x, y]) => `${X(x).toFixed(1)},${Y(y).toFixed(1)}`).join(" ")}" fill="none" stroke="#777" stroke-width="1.2" stroke-dasharray="7 4"/>`;
+  const sk = sd.sides, mid = (a, b) => [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2], [A, B, C, D] = poly;   // A front-left, B front-right, C back-right, D back-left
+  const lbl = (k, len) => `${SIDE_KINDS[sk[k]]}${sk[k] === "street" && sd.streetW[k] ? ` عرضه ${+sd.streetW[k]} م` : ""} • ${+(+len).toFixed(2)} م`;
+  const fm = mid(A, B), rm = mid(B, C), lm = mid(A, D), bm = mid(C, D);
+  g += t(X(fm[0]), Y(maxY) + 52, "⬇ " + lbl("front", pl.fw), {fs: 11, b: 1, c: sk.front === "street" ? "#1a5" : "#555"}) + t(X(bm[0]), Y(minY) - 64, lbl("back", pl.bw), {fs: 10, c: sk.back === "street" ? "#1a5" : "#555"});
+  g += t(X(maxX) + 64, Y(rm[1]), "يمين: " + lbl("right", pl.rl), {fs: 10, c: sk.right === "street" ? "#1a5" : "#555", rot: -90}) + t(X(minX) - 70, Y(lm[1]), "شمال: " + lbl("left", pl.ll), {fs: 10, c: sk.left === "street" ? "#1a5" : "#555", rot: -90});
+  const ang = {N: 180, S: 0, E: 90, W: 270}[sd.facing] || 0, nx = M + planW - 40, ny = M + 60;
+  g += `<g transform="rotate(${ang} ${nx} ${ny})"><circle cx="${nx}" cy="${ny}" r="20" fill="#fff" stroke="#333"/><path d="M${nx} ${ny - 18} L${nx + 7} ${ny + 8} L${nx} ${ny + 3} L${nx - 7} ${ny + 8}Z" fill="#111"/></g>` + t(nx, ny - 26, "N", {fs: 11, b: 1});
   // axes
   const letters = "ABCDEFGHIJKLMN";
   sd.xs.forEach((x, i) => { g += `<line x1="${X(x)}" y1="${Y(0) - 40}" x2="${X(x)}" y2="${Y(sd.L) + 22}" stroke="#c33" stroke-width="0.7" stroke-dasharray="10 3 2 3"/><circle cx="${X(x)}" cy="${Y(0) - 52}" r="11" fill="#fff" stroke="#c33"/>` + t(X(x), Y(0) - 48, letters[i] || i, {fs: 11, b: 1, c: "#c33"}); });
@@ -5596,7 +5634,7 @@ function structSheet(p, sd, kind){
   // title block
   const tb = PH - M - 64;
   g += `<rect x="${M}" y="${tb}" width="${PW - 2 * M}" height="64" fill="#fafafa" stroke="#111"/>` + t(PW - M - 10, tb + 24, kind === "found" ? "لوحة 1: مسقط الأعمدة والقواعد" : "لوحة 2: مسقط السقف الإنشائي (الدور المتكرر)", {fs: 15, a: "end", b: 1}) +
-    t(PW - M - 10, tb + 46, `${p.name} • الأرض ${fmtN(sd.plot.w)}×${fmtN(sd.plot.l)} م • المبنى ${sd.W.toFixed(1)}×${sd.L.toFixed(1)} م • ${fmtN(sd.n)} دور`, {fs: 11, a: "end"}) +
+    t(PW - M - 10, tb + 46, `${p.name} • الأرض ${fmtN(sd.plot.fw)}×${fmtN(sd.plot.rl)} م • الواجهة ${FACING[sd.facing]} • المبنى ${sd.W.toFixed(1)}×${sd.L.toFixed(1)} م • ${fmtN(sd.n)} دور`, {fs: 11, a: "end"}) +
     t(M + 10, tb + 24, "نسيم — تصميم إنشائي مبدئي", {fs: 12, a: "start", b: 1}) + t(M + 10, tb + 46, `التاريخ ${fmtDay(nowISO())} • مقياس تقريبي 1:${Math.round(1000 / sc * 1.33)}`, {fs: 10, a: "start"});
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${PW} ${PH}" width="${PW}" height="${PH}" font-family="Tahoma, Arial, sans-serif"><rect width="${PW}" height="${PH}" fill="#fff"/><rect x="${M / 2}" y="${M / 2}" width="${PW - M}" height="${PH - M}" fill="none" stroke="#111" stroke-width="2"/>${g}</svg>`;
 }
@@ -5616,7 +5654,7 @@ async function structMedia(p, kind, btn){
   if (btn){ btn.disabled = true; btn.textContent = kind === "video" ? "بسجّل الفيديو… (حوالي 25 ثانية)" : "بجهز الصورة…"; }
   try{
     const m = await import("./studio3d.js");
-    const layout = {W: d.W, L: d.L, floors: d.floors.map(f => ({name: f.name, rooms: buildLayout(d, f)}))};
+    const layout = {W: d.W, L: d.L, sides: plotSides(p.build.inp), facing: p.build.inp.facing || "N", floors: d.floors.map(f => ({name: f.name, rooms: buildLayout(d, f)}))};
     if (kind === "facade"){
       const shots = await m.shots({title: p.name, layout, scene: d.scene || null});
       const box = h("div",{}, ...shots.map((u, i) => h("div",{style: "margin:6px 0"}, h("img",{src: u, alt: ["الواجهة الأمامية", "منظور من الركن", "منظور علوي"][i] || "منظور", style: "width:100%;border-radius:10px"}),
@@ -5643,25 +5681,41 @@ function openStruct(id){
   structOpenId = id; buildOpenId = null; const inp = p.build.inp;
   if (!p.build.design){ p.build.design = buildDefaultDesign(p); store.save(); }
   const sd = structDesign(p);
-  const num = (v, ph, w = 80) => h("input",{class: "voice-select", type: "number", inputmode: "decimal", dir: "ltr", value: v == null || v === "" ? "" : String(v), placeholder: ph, style: `max-width:${w}px`});
-  const fW = num(inp.plotW || inp.w, "عرض الأرض"), fL = num(inp.plotL || inp.l, "عمق الأرض"), fF = num(inp.front, "ردّ أمامي", 80), fB = num(inp.back, "ردّ خلفي", 80), fS = num(inp.side, "ردّ جانبي", 80), fN = num(inp.floors, "أدوار", 60), fQ = num(inp.soil ? inp.soil / 100 : "", "جهد التربة كجم/سم²", 120);
+  const num = (v, ph, w = 92) => h("input",{class: "voice-select", type: "number", inputmode: "decimal", dir: "ltr", value: v == null || v === "" ? "" : String(v), placeholder: ph, "aria-label": ph, style: `max-width:${w}px`});
+  const lab = (t, el) => h("label",{class: "ai-field", style: "margin:0;flex:1 1 30%;min-width:96px"}, h("span",{class: "pref-label", style: "font-size:12px"}, t), el);
+  const sides = plotSides(inp), sw = inp.streetW || {};
+  const fW = num(inp.plotW || inp.w, "م"), fWb = num(inp.plotWb, "زي الواجهة"), fR = num(inp.plotLr || inp.plotL || inp.l, "م"), fLl = num(inp.plotLl, "زي اليمين");
+  const fF = num(inp.front, "0"), fB = num(inp.back, "0"), fS = num(inp.side, "0"), fN = num(inp.floors, "أدوار"), fQ = num(inp.soil ? inp.soil / 100 : "", "1.5");
+  const kindSel = k => h("select",{class: "voice-select", "data-side": k}, Object.entries(SIDE_KINDS).map(([v, t]) => h("option",{value: v, selected: sides[k] === v || null}, t)));
+  const sideRow = (k, t) => { const sel = kindSel(k), wv = num(sw[k], "عرض الشارع", 110); const row = h("div",{class: "row", style: "align-items:center;gap:6px;flex-wrap:wrap"}, h("span",{style: "min-width:74px"}, t), sel, wv);
+    const sync = () => { wv.hidden = sel.value !== "street"; }; sel.onchange = sync; sync(); row._get = () => ({kind: sel.value, w: +wv.value || null}); return row; };
+  const rows = {front: sideRow("front", "الواجهة"), right: sideRow("right", "جنب يمين"), left: sideRow("left", "جنب شمال"), back: sideRow("back", "الخلفي")};
+  const fFace = h("select",{class: "voice-select"}, Object.entries(FACING).map(([v, t]) => h("option",{value: v, selected: (inp.facing || "N") === v || null}, "الواجهة " + t)));
   const apply = () => {
-    const pw = +fW.value || inp.plotW || inp.w, pl = +fL.value || inp.plotL || inp.l, fr = +fF.value || 0, bk = +fB.value || 0, sdv = +fS.value || 0;
-    const w = Math.max(4, pw - 2 * sdv), l = Math.max(4, pl - fr - bk);
-    Object.assign(inp, {plotW: pw, plotL: pl, front: fr, back: bk, side: sdv, w, l, footprint: Math.round(w * l), floors: Math.min(8, Math.max(1, +fN.value || inp.floors)), soil: +fQ.value ? +fQ.value * 100 : inp.soil});
+    const sidesNew = {}, swNew = {}; for (const [k, r] of Object.entries(rows)){ const g = r._get(); sidesNew[k] = g.kind; if (g.w) swNew[k] = g.w; }
+    Object.assign(inp, {plotW: +fW.value || inp.plotW || inp.w, plotWb: +fWb.value || null, plotLr: +fR.value || inp.plotLr || inp.plotL || inp.l, plotLl: +fLl.value || null,
+      front: +fF.value || 0, back: +fB.value || 0, side: +fS.value || 0, floors: Math.min(8, Math.max(1, +fN.value || inp.floors)), soil: +fQ.value ? +fQ.value * 100 : inp.soil, sides: sidesNew, streetW: swNew, facing: fFace.value});
+    inp.plotL = inp.plotLr; const fp = plotFootprint(inp); inp.w = fp.w; inp.l = fp.l; inp.footprint = Math.round(fp.w * fp.l);
     const q = buildQuantities(inp), old = new Map(p.items.map(i => [i.name, i]));
     p.items = q.items.map(i => { const o = old.get(i.name); return o ? {...i, price: o.price, source: o.source, url: o.url, asOf: o.asOf, checked: o.checked} : i; });
     p.build.beds = q.beds; p.build.baths = q.baths; p.name = buildTitle(inp);
-    if (p.build.design && (Math.abs(p.build.design.W - w) > 0.05 || Math.abs(p.build.design.L - l) > 0.05 || p.build.design.floors.length !== inp.floors)) p.build.design = buildDefaultDesign(p);
-    store.save(); openStruct(id); toast("اتحسب تاني ✓");
+    p.build.design = buildDefaultDesign(p); store.save(); openStruct(id); toast("اتحسب تاني ✓ — بطلب من المعماري تصميم على البيانات الجديدة");
+    buildDesign(p, null).then(() => { if (structOpenId === id) openStruct(id); });
   };
   const prev = kind => { const box = h("div",{style: "overflow:auto;border:1px solid var(--line);border-radius:10px;background:#fff;margin:6px 0"}); box.innerHTML = structSheet(p, sd, kind).replace(/width="1190" height="842"/, 'width="100%" style="min-width:640px"'); return box; };
   sheet.replaceChildren(h("h2",{id: "sheetTitle"}, "🏗️ التصميم الإنشائي المبدئي"),
     h("div",{class: "sub"}, `${p.name} • شبكة ${fmtN(sd.xs.length)}×${fmtN(sd.ys.length)} محاور • ${fmtN(sd.cols.length)} عمود • بلاطة ${fmtN(sd.slabT)} سم • خرسانة الهيكل حوالي ${fmtN(sd.conc)} م³ و${fmtN(sd.steel)} طن حديد`),
-    h("details",{class: "card", style: "padding:8px;margin:6px 0", open: !inp.plotW || null}, h("summary",{}, "📏 بيانات الأرض (عدّل واحسب تاني)"),
-      h("div",{class: "row", style: "flex-wrap:wrap;gap:6px"}, fW, fL, fF, fB, fS, fN, fQ),
-      h("div",{class: "att-note"}, "الردود بالمتر. جهد التربة من تقرير الجسات (لو مش معاك، بفترض 1.5 كجم/سم²)."), h("button",{class: "btn ghost", onclick: apply}, "احسب تاني")),
-    p.build.design && p.build.design.local ? h("div",{class: "att-note"}, "التقسيم الحالي محلي. اضغط \"✏️ اقترح تصميم\" في المقايسة عشان المعماري الذكي يقترح أحسن توزيع، واللوحة هتتعدّل عليه.") : null,
+    h("details",{class: "card", style: "padding:8px;margin:6px 0", open: !inp.sides || null}, h("summary",{}, "📏 بيانات الأرض والجيران والاتجاه (عدّل واحسب تاني)"),
+      h("div",{class: "sub"}, "أطوال الأرض (متر)"),
+      h("div",{class: "row", style: "flex-wrap:wrap;gap:6px"}, lab("عرض الواجهة", fW), lab("العرض الخلفي", fWb), lab("جنب يمين", fR), lab("جنب شمال", fLl)),
+      h("div",{class: "sub", style: "margin-top:6px"}, "كل جنب عليه إيه؟ (يمين وشمال وإنت واقف في الشارع وبصّ للأرض)"), rows.front, rows.right, rows.left, rows.back,
+      h("div",{class: "sub", style: "margin-top:6px"}, "اتجاه المبنى"), fFace,
+      h("div",{class: "sub", style: "margin-top:6px"}, "الردود والأدوار والتربة"),
+      h("div",{class: "row", style: "flex-wrap:wrap;gap:6px"}, lab("ردّ أمامي", fF), lab("ردّ خلفي", fB), lab("ردّ جانبي", fS), lab("الأدوار", fN), lab("جهد التربة كجم/سم²", fQ)),
+      h("div",{class: "att-note"}, "الحيطة اللي على جار بتتعمل من غير شبابيك (قانون البناء)، ولو أغلب الجوانب جيران المعماري بيحط منور. جهد التربة من تقرير الجسات، ولو مش معاك بفترض 1.5."),
+      h("button",{class: "btn primary", onclick: apply}, "احسب تاني واطلب تصميم جديد")),
+    p.build.design && p.build.design.concept && !p.build.design.local ? h("div",{class: "card", style: "padding:8px"}, h("b",{}, "💡 فكرة المعماري: "), p.build.design.concept, p.build.design.provider && window.NASEM_APP ? h("div",{class: "sub"}, "اتعمل بـ " + window.NASEM_APP.PROVIDER_NAMES[p.build.design.provider]) : null) : "",
+    p.build.design && p.build.design.local ? h("div",{class: "att-note"}, "التقسيم الحالي محلي. اضغط \"✏️ اقترح تصميم\" في المقايسة عشان المعماري الذكي يقترح أحسن توزيع، واللوحة هتتعدّل عليه.") : "",
     h("div",{class: "sub", style: "margin-top:6px"}, "لوحة 1: الأعمدة والقواعد"), prev("found"), h("div",{class: "sub"}, "لوحة 2: السقف الإنشائي"), prev("roof"),
     h("div",{class: "row", style: "flex-wrap:wrap"},
       h("button",{class: "btn primary", onclick: () => structPrint(p, sd)}, "📄 اللوحات PDF (A3)"),
@@ -5672,6 +5726,19 @@ function openStruct(id){
     h("p",{class: "att-note", style: "color:var(--danger)"}, "⚠️ ده تصميم إنشائي مبدئي بقواعد استرشادية، للتخطيط والتسعير والنقاش مع المهندس. لازم مهندس إنشائي نقابي يعمل الحسابات واللوحات التنفيذية ويعتمدها، وجسات تربة، وترخيص قبل أي تنفيذ."),
     h("div",{class: "row"}, h("button",{class: "btn ghost", onclick: () => openBuild(p.id)}, "📐 المقايسة"), h("button",{class: "btn ghost", onclick: () => { structOpenId = null; closeSheet(); }}, "تمام")));
   sheetBack.hidden = false;
+}
+/* ---- the plot: four sides (street / neighbour / open), and which way the front faces ---- */
+const SIDE_KINDS = {street: "شارع", neighbor: "جار", open: "أرض فضاء / حديقة"};
+const FACING = {N: "بحري (شمال)", S: "قبلي (جنوب)", E: "شرقي", W: "غربي"};
+const plotSides = inp => ({front: "street", back: "neighbor", right: "neighbor", left: "neighbor", ...(inp.sides || {})});
+/* compass direction each side faces, from the direction the front (street) faces */
+function sideFacing(facing){
+  const order = ["N", "E", "S", "W"], i = order.indexOf(facing || "N");
+  return {front: order[i], right: order[(i + 1) % 4], back: order[(i + 2) % 4], left: order[(i + 3) % 4]};
+}
+function plotFootprint(inp){
+  const fw = +inp.plotW || inp.w, bw = +inp.plotWb || fw, rl = +inp.plotLr || +inp.plotL || inp.l, ll = +inp.plotLl || rl, sideSb = +inp.side || 0;
+  return {w: Math.max(4, Math.min(fw, bw) - 2 * sideSb), l: Math.max(4, Math.min(rl, ll) - (+inp.front || 0) - (+inp.back || 0)), fw, bw, rl, ll};
 }
 /* the structural tool without typing a sentence: plot width, depth, floors → sheets */
 function openStructNew(){
@@ -5692,18 +5759,29 @@ function openStructNew(){
 function parseStruct(text){
   const n = arNorm(clean(text));
   if (!/(تصميم انشائي|لوحه انشائيه|لوحات انشائيه|انشائي|قطعه ارض|عندي ارض|ارض مساحتها|ارض ابعادها)/.test(n)) return null;
-  const dims = n.match(/(\d+(?:\.\d+)?)\s*(?:[x×*]|في)\s*(\d+(?:\.\d+)?)/), am = n.match(/(\d+(?:\.\d+)?)\s*(?:متر|م2|م(?=\s|$))/);
+  const n2 = n; const dims = n.match(/(\d+(?:\.\d+)?)\s*(?:[x×*]|في)\s*(\d+(?:\.\d+)?)/), am = n.match(/(\d+(?:\.\d+)?)\s*(?:متر|م2|م(?=\s|$))/);
   let w = dims ? +dims[1] : null, l = dims ? +dims[2] : null;
   if (!w && am){ const a = +am[1]; w = Math.round(Math.sqrt(a) * 10) / 10; l = Math.round(a / w * 10) / 10; }
+  { const g0 = re => { const m2 = n.match(re); return m2 ? +m2[1] : null; };
+    const fw0 = g0(/(?:ال)?واجه[هة]?\s*(?:عرضها\s*)?(\d+(?:\.\d+)?)/), rr0 = g0(/(?:ال)?(?:جنب|ضلع)\s*(?:ال)?يمين\s*(\d+(?:\.\d+)?)/);
+    if (fw0 && rr0){ w = fw0; l = rr0; } }
   if (!w || w * l < 30 || w * l > 5000) return null;
   const fm = n.match(/(\d+)\s*(?:ادوار|دور|طوابق)/); let floors = /دورين/.test(n) ? 2 : fm ? +fm[1] : 2;
   const back = (n.match(/ردود?\s*(?:خلفي|من ورا)\s*(\d+(?:\.\d+)?)/) || [])[1], front = (n.match(/ردود?\s*(?:امامي|من قدام)\s*(\d+(?:\.\d+)?)/) || [])[1];
-  return {plotW: w, plotL: l, floors: Math.min(8, floors), front: front ? +front : 0, back: back ? +back : 0, needs: clean(text)};
+  const g1 = re => { const m2 = n.match(re); return m2 ? +m2[m2.length - 1] : null; };
+  const fw = g1(/(?:عرض\s*)?(?:ال)?واجه[هة]?\s*(?:عرضها\s*)?(\d+(?:\.\d+)?)/), rr = g1(/(?:ال)?(?:جنب|ضلع)\s*(?:ال)?يمين\s*(\d+(?:\.\d+)?)/), ll = g1(/(?:ال)?(?:جنب|ضلع)\s*(?:ال)?(?:شمال|يسار)\s*(\d+(?:\.\d+)?)/), bw = g1(/(?:الضلع\s*)?(?:ال)?خلفي\s*(\d+(?:\.\d+)?)/);
+  if (fw) w = fw; if (rr) l = rr;
+  const sides = {front: "street", back: "neighbor", right: "neighbor", left: "neighbor"};
+  if (/(ناصيه|علي شارعين|شارعين)/.test(n)) sides.right = "street";
+  for (const [k, re] of [["right", /(?:جنب|ضلع)\s*(?:ال)?يمين[^،,]{0,12}(شارع|جار|فضاء|حديقه)/], ["left", /(?:جنب|ضلع)\s*(?:ال)?(?:شمال|يسار)[^،,]{0,12}(شارع|جار|فضاء|حديقه)/], ["back", /(?:خلفي|من ورا|الخلف)[^،,]{0,12}(شارع|جار|فضاء|حديقه)/]]){
+    const m2 = n.match(re); if (m2) sides[k] = m2[1] === "شارع" ? "street" : m2[1] === "جار" ? "neighbor" : "open"; }
+  const fc = (n.match(/(بحري|قبلي|شرقي|غربي)/) || [])[1], facing = fc ? {بحري: "N", قبلي: "S", شرقي: "E", غربي: "W"}[fc] : "N";
+  return {plotW: w, plotL: l, plotWb: bw, plotLl: ll, floors: Math.min(8, floors), front: front ? +front : 0, back: back ? +back : 0, sides, facing, needs: clean(text)};
 }
 function localStruct(text){
   const x = parseStruct(text); if (!x) return null;
-  const w = x.plotW, l = Math.max(4, x.plotL - x.front - x.back);
-  const inp = {footprint: Math.round(w * l), floors: x.floors, w, l, level: "mid", bedrooms: null, baths: null, needs: x.needs, gov: "", plotW: x.plotW, plotL: x.plotL, front: x.front, back: x.back, side: 0};
+  const inp0 = {plotW: x.plotW, plotL: x.plotL, plotLr: x.plotL, plotWb: x.plotWb, plotLl: x.plotLl, front: x.front, back: x.back, side: 0}, fp = plotFootprint(inp0), w = fp.w, l = fp.l;
+  const inp = {footprint: Math.round(w * l), floors: x.floors, w, l, level: "mid", bedrooms: null, baths: null, needs: x.needs, gov: "", ...inp0, sides: x.sides, facing: x.facing};
   const p = buildNew(inp);
   p.build.design = buildDefaultDesign(p); store.save();
   setTimeout(async () => { openStruct(p.id); await buildDesign(p, null); if (structOpenId === p.id) openStruct(p.id); }, 60);
