@@ -97,6 +97,7 @@ export function open(opts) {
   .s3d .stick i{position:absolute;left:35px;top:35px;width:40px;height:40px;border-radius:50%;background:#fffc}
   .s3d.walk .stick{display:block}`;
   const root = el("div", { class: "s3d", role: "dialog", "aria-label": "مجسم 3D" }, el("style", {}, css));
+  if (opts.headless) root.style.cssText = "position:fixed;left:-10000px;top:0;width:1280px;height:720px;inset:auto;pointer-events:none";
   const canvas = el("canvas", { "aria-label": "المجسم" });
   const hint = el("div", { class: "hint" }, "اسحب عشان تلف • قرّب بصباعين • دوس على أي حاجة عشان تختارها");
   const stick = el("div", { class: "stick" }, el("i"));
@@ -388,5 +389,50 @@ export function open(opts) {
   }
   applyVisibility(); setMode("orbit"); raf = requestAnimationFrame(frame);
   if (firstTime) save();
-  return { close: () => btnClose.click(), state, _debug: { scene, camera, setMode, pick, selectFurniture, orbit, walk, floorSel, renderer } };
+  const ctl = {
+    renderer, camera, scene, orbit, walk, setMode, canvas,
+    setFloor: (v) => { viewFloor = String(v); applyVisibility(); },
+    entrance: () => entrance, hubCenter: () => { const f = layout.floors[0], r = f.rooms.find((x) => /صال|ريسبشن|معيش|استقبال/.test(x.name)) || f.rooms[0]; return { x: r.x + r.w / 2, z: r.y + r.h / 2 }; },
+    render: () => { placeCamera(); renderer.render(scene, camera); },
+  };
+  return { close: () => btnClose.click(), state, ctl, _debug: { scene, camera, setMode, pick, selectFurniture, orbit, walk, floorSel, renderer } };
+}
+
+
+/* ---------- media for the structural sheet: facade pictures and a fly-around + walk-in video, made on the phone ---------- */
+const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+export async function shots(opts) {
+  const st = open({ ...opts, headless: true, onSave: null }), c = st.ctl, out = [];
+  const Lo = opts.layout, hgt = Lo.floors.length * H, fit = Math.max(Lo.W * 0.95, hgt * 1.7, 8);
+  const reach = Math.hypot(Lo.W, Lo.L) / 2;   // camera distance is measured from the building centre
+  const views = [{ theta: 0, phi: 1.38, r: Lo.L / 2 + fit * 1.15 + 4 }, { theta: -0.7, phi: 1.2, r: reach + fit * 1.2 + 4 }, { theta: 0.65, phi: 0.8, r: reach + fit * 1.35 + 5 }];
+  await wait(150);
+  for (const v of views) { Object.assign(c.orbit, v, { ty: hgt * 0.5 }); c.render(); await wait(60); c.render(); out.push(c.canvas.toDataURL("image/jpeg", 0.9)); }
+  st.close(); return out;
+}
+export async function recordTour(opts) {
+  const st = open({ ...opts, headless: true, onSave: null }), c = st.ctl, L = opts.layout;
+  const stream = c.canvas.captureStream(30);
+  const type = ["video/mp4;codecs=avc1", "video/mp4", "video/webm;codecs=vp9", "video/webm"].find((t) => window.MediaRecorder && MediaRecorder.isTypeSupported(t)) || "video/webm";
+  const rec = new MediaRecorder(stream, { mimeType: type, videoBitsPerSecond: 4_000_000 }), chunks = [];
+  rec.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
+  const done = new Promise((r) => (rec.onstop = r));
+  const big = Math.max(L.W, L.L, L.floors.length * H);
+  const anim = (ms, step) => new Promise((res) => { const t0 = performance.now(); const f = (t) => { const k = Math.min(1, (t - t0) / ms); step(k * k * (3 - 2 * k)); c.render(); if (k < 1) requestAnimationFrame(f); else res(); }; requestAnimationFrame(f); });
+  rec.start(250);
+  const say = (t) => opts.onProgress && opts.onProgress(t);
+  say("🎬 لفة حوالين المبنى…");
+  c.setMode("orbit"); c.setFloor("all");
+  await anim(10000, (k) => Object.assign(c.orbit, { theta: -1.3 + k * 2.6, phi: 1.25 - 0.15 * Math.sin(k * Math.PI), r: Math.max(L.W, L.L) * 1.3 + L.floors.length * H + 3, ty: L.floors.length * H * 0.45 }));
+  say("🎬 الدور الأرضي من فوق…");
+  c.setFloor(0);
+  await anim(4000, (k) => Object.assign(c.orbit, { theta: 1.3 - k * 1.3, phi: 1.0 - k * 0.45, r: Math.max(L.W, L.L) * 1.35 + 3, ty: 1 }));
+  say("🎬 جولة جوه…");
+  c.setMode("walk"); c.setFloor(0);
+  const e = c.entrance() || { cx: L.W / 2, cz: L.L, horiz: true, line: L.L }, hub = c.hubCenter();
+  const sx = c.walk.x, sz = c.walk.z, yaw0 = c.walk.yaw;
+  await anim(5000, (k) => { c.walk.x = sx + (hub.x - sx) * k; c.walk.z = sz + (hub.z - sz) * k; c.walk.yaw = yaw0; c.walk.pitch = -0.05; });
+  await anim(7000, (k) => { c.walk.yaw = yaw0 + k * Math.PI * 2; });
+  rec.stop(); await done; st.close();
+  return new Blob(chunks, { type: type.split(";")[0] });
 }
