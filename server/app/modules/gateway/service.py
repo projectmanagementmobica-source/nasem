@@ -77,6 +77,8 @@ class GatewayService:
             audio=decode_image(req.audio.media_type, req.audio.data_b64) if req.audio else None,
         )
         order = [p for p in settings.gateway_provider_order if p in self._providers and self._providers[p].available()]
+        if call.tier == "best" and "anthropic" in order:   # the hardest jobs go to Claude first when it is connected
+            order = ["anthropic"] + [p for p in order if p != "anthropic"]
         if call.audio is not None:  # of the three, only Gemini accepts audio directly
             order = [p for p in order if p == "gemini"]
             if not order:

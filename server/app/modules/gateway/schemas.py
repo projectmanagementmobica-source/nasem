@@ -27,7 +27,7 @@ class AudioIn(_Strict):
 class CompleteRequest(_Strict):
     prompt: str = Field(min_length=1, max_length=200_000)
     audio: AudioIn | None = None
-    tier: Literal["main", "quick"] = "main"
+    tier: Literal["main", "quick", "best"] = "main"   # best: design, feasibility — Claude first when connected
     web_search: bool = False
     images: list[ImageIn] = Field(default_factory=list, max_length=4)
 

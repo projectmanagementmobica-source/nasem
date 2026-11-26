@@ -17,7 +17,7 @@ class Settings(BaseSettings):
 
     # --- LLM (Anthropic) ---
     anthropic_api_key: SecretStr | None = None
-    llm_model: str = "claude-sonnet-5"
+    llm_model: str = "claude-sonnet-5-5"
     llm_max_tokens: int = 2048
     llm_timeout_seconds: float = 30.0
     llm_max_retries: int = 2  # SDK-level retries for transient API errors (429 / 5xx / network)
@@ -45,8 +45,9 @@ class Settings(BaseSettings):
 
     # --- AI gateway (the installed app talks ONLY to this; provider keys never leave the server) ---
     gateway_provider_order: list[str] = ["gemini", "groq", "anthropic", "openai"]
-    anthropic_model_main: str = "claude-sonnet-5"
-    anthropic_model_quick: str = "claude-haiku-4-5-20251001"
+    anthropic_model_main: str = "claude-sonnet-5-5"
+    anthropic_model_quick: str = "claude-haiku-5-5"
+    anthropic_model_best: str = "claude-opus-5-5"     # the strongest model, used for "best" (architect, feasibility)
     openai_api_key: SecretStr | None = None
     openai_model_main: str = ""
     openai_model_quick: str = ""

@@ -327,7 +327,7 @@
       audio = { media_type: mt, data_b64: await blobToB64(opts.audio) };
     }
     let res;
-    const body = { prompt, tier: opts.modelTier === "quick" ? "quick" : "main", web_search: !!opts.webSearch, images, ...(audio ? { audio } : {}) };
+    const body = { prompt, tier: opts.modelTier === "quick" ? "quick" : opts.modelTier === "best" ? "best" : "main", web_search: !!opts.webSearch, images, ...(audio ? { audio } : {}) };
     for (let attempt = 0; attempt < 2; attempt++) {   // AI "high demand" spikes pass in seconds: one quiet retry before showing an error
       try {
         res = await gwPost("/v1/gateway/complete", body, opts.signal);

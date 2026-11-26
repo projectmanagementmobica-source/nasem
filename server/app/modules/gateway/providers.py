@@ -20,7 +20,7 @@ from app.core.config import settings
 from app.modules.orchestrator.errors import LLMOutputError, LLMUnavailableError
 from app.modules.orchestrator.llm_client import parse_json_object
 
-Tier = Literal["main", "quick"]
+Tier = Literal["main", "quick", "best"]
 JSON_ONLY = "\n\nReply with ONLY the JSON object, nothing before or after it."
 
 
@@ -124,7 +124,7 @@ class AnthropicProvider:
             if call.web_search and settings.web_search_enabled
             else []
         )
-        model = settings.anthropic_model_quick if call.tier == "quick" else settings.anthropic_model_main
+        model = settings.anthropic_model_quick if call.tier == "quick" else (settings.anthropic_model_best or settings.anthropic_model_main) if call.tier == "best" else settings.anthropic_model_main
         client = self._get_client()
         seen: list[dict[str, Any]] = []
         for _ in range(4):

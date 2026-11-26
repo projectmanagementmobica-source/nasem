@@ -2677,9 +2677,10 @@ function cloudVoiceSettings(){
 
 /* ---------------- identity: "تعرّف على نسيم" ---------------- */
 const APP = {
-  name: "نسيم", nameLatin: "NASEM AI", version: "إصدار 6.0 (تطبيق)",
+  name: "نسيم", nameLatin: "NASEM AI", version: "إصدار 6.1 (تطبيق)",
   updated: "2026-11-25",
   changes: [
+    "🧠 المعماري ودراسات الجدوى واقتراح المشاريع بيستخدموا أقوى موديل متوصّل (Claude Opus أول ما يتوصّل)",
     "🧭 التصميم الإنشائي بقى ياخد أطوال الأرض الأربعة، وكل جنب عليه شارع ولا جار، واتجاه الواجهة (بحري/قبلي/شرقي/غربي)، والمعماري الذكي بيحط الأوض بنفسه ويعمل منور لو لازم",
     "🏗️ التصميم الإنشائي والمقايسة بقوا ليهم مربعات في الاستوديو، وتقدر تقول \"فين اللوحة الإنشائية\"",
     "🏗️ التصميم الإنشائي المبدئي: ابعت أبعاد الأرض، يطلع لوحة أعمدة وقواعد ولوحة سقف بجداول التسليح (PDF A3)، وصورة الواجهة، وفيديو برّه وجوه",
@@ -4949,7 +4950,7 @@ Owner's needs (Arabic, may be short): """${String(inp.needs || "").slice(0, 400)
 Rules: Egyptian family living (reception/ريسبشن near entrance, kitchen ventilated, bedrooms private, master with bathroom if possible), stairs on every floor (≈ 2.5×5 m), natural light and cross ventilation for Egypt's climate (north-facing windows preferred), room areas must add up to about 90% of the floor (walls take the rest). Use realistic room sizes in meters.
 Reply with ONLY JSON: {"concept":"<2 sentences in Egyptian Arabic explaining the main design choices>","floors":[{"name":"<Arabic floor name>","rooms":[{"name":"<Arabic room name, use منور for a light well>","x":<m from left>,"y":<m from back>,"w":<m along x>,"l":<m along y>}]}],"tips":["<short Arabic tip>", ...max 5],"code_notes":["<Arabic note about Egyptian building code / permits / setbacks to check>", ...max 3]}`;
   try{
-    const raw = await sample.json(prompt, {modelTier: "default", cache: false});
+    const raw = await sample.json(prompt, {modelTier: "best", cache: false});
     const floors = Array.isArray(raw && raw.floors) ? raw.floors.slice(0, 10).map(f => ({name: String(f.name || "دور").slice(0, 40),
       rooms: (Array.isArray(f.rooms) ? f.rooms : []).slice(0, 18).map(r => ({name: String(r.name || "غرفة").slice(0, 30), w: Math.max(1, Math.min(30, toNumber(r.w) || 3)), l: Math.max(1, Math.min(30, toNumber(r.l) || 3)),
         ...(r.x != null && r.y != null ? {x: Math.max(0, toNumber(r.x) || 0), y: Math.max(0, toNumber(r.y) || 0)} : {})}))})).filter(f => f.rooms.length) : [];
@@ -5164,7 +5165,7 @@ Reply with ONLY one JSON object, all text in simple Egyptian Arabic:
   const lab = btn ? btn.textContent : "";
   if (btn){ btn.disabled = true; btn.textContent = "بدرس السوق…"; }
   try{
-    const raw = await sample.json(prompt, {modelTier: "default", webSearch: true, cache: false});
+    const raw = await sample.json(prompt, {modelTier: "best", webSearch: true, cache: false});
     const num = v => Math.max(0, toNumber(v) || 0), str = (v, n = 300) => typeof v === "string" ? v.trim().slice(0, n) : "", arr = (v, n) => Array.isArray(v) ? v.slice(0, n) : [];
     const d = {title: str(raw.title, 80) || st.idea, summary: str(raw.summary, 600),
       market: {demand: arr(raw.market && raw.market.demand, 6).map(x => str(x)), customers: arr(raw.market && raw.market.customers, 5).map(x => str(x, 120)),
@@ -5198,7 +5199,7 @@ Reply with ONLY JSON, text in simple Egyptian Arabic:
 Give 4 or 5 ideas.`;
   const lab = btn.textContent; btn.disabled = true; btn.textContent = "بدرس السوق وبفكر…"; out.replaceChildren(h("div",{class: "att-note"}, "بدوّر على الطلب في السوق والفرص اللي تناسبك… ده ممكن ياخد دقيقة."));
   try{
-    const raw = await sample.json(prompt, {modelTier: "default", webSearch: true, cache: false});
+    const raw = await sample.json(prompt, {modelTier: "best", webSearch: true, cache: false});
     const ideas = (Array.isArray(raw.ideas) ? raw.ideas : []).slice(0, 6).filter(x => x && x.name);
     if (!ideas.length) throw new Error("no ideas");
     const src = mergeSources((raw.sources || []).filter(x => x && /^https?:\/\//.test(x.url || "")), raw._sources).list;
