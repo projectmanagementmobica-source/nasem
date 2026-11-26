@@ -341,6 +341,7 @@ main{overflow-x:hidden}
 .tab .tab-tx{max-width:100%;overflow:hidden;text-overflow:ellipsis}
 .tab[aria-selected="true"]{color:var(--breeze);background:var(--surface);box-shadow:0 0 0 1px var(--line),0 2px 8px rgba(0,0,0,.06)}
 .tab[aria-selected="true"] .tab-ic{background:var(--breeze-soft);border-radius:9px}
+.badge[hidden]{display:none!important}
 .tab .badge{position:absolute;top:-6px;inset-inline-end:-10px;margin:0;min-width:17px;height:17px;font-size:10.5px;padding:0 4px}
 @media (max-width:430px){
   .tabs{gap:2px;padding:0 6px 8px}
@@ -1367,7 +1368,7 @@ async function send(text, source = "text"){
   if (text.length > MAX_INPUT){ toast("الرسالة أطول من 4000 حرف."); return; }
   // Simple things are answered on the phone itself: instant, private, offline, and they don't spend the AI quota.
   if (!EMERGENCY_RE.test(text)){
-    const lr = localHelp(text) || localBrief(text) || localSiteReport(text) || localSearch(text) || localBuild(text) || localFeas(text) || localBooks(text) || localSpend(text) || localAnswer(text) || marketAlertLocal(text) || (isMarketText(text) ? await marketAnswer(text) : null);
+    const lr = localHelp(text) || localBrief(text) || localFeature(text) || localSiteReport(text) || localSearch(text) || localBuild(text) || localFeas(text) || localBooks(text) || localSpend(text) || localAnswer(text) || marketAlertLocal(text) || (isMarketText(text) ? await marketAnswer(text) : null);
     const local = lr && typeof lr === "object" ? lr.text : lr;
     if (local){
       S.messages.push({id:uid(), role:"user", text, at:nowISO(), source}); noteMessage(text, source);
@@ -1626,6 +1627,7 @@ function renderChat(){
       : l.url === "#say" ? h("button",{class:"fb", onclick:openSayAll}, l.label)
       : /^#research:/.test(l.url) ? h("button",{class:"fb", onclick:() => startResearch(l.url.slice(10))}, l.label)
       : /^#build:/.test(l.url) ? h("button",{class:"fb", onclick:() => openBuild(l.url.slice(7))}, l.label)
+      : /^#feat:/.test(l.url) ? h("button",{class:"fb", onclick:() => runFeature(l.url.slice(6))}, l.label)
       : /^#site:/.test(l.url) ? h("button",{class:"fb", onclick:() => openSiteReport(l.url.slice(6))}, l.label)
       : l.url === "#feas:suggest" ? h("button",{class:"fb", onclick:() => openFeasHome("suggest")}, l.label)
       : /^#feas:/.test(l.url) ? h("button",{class:"fb", onclick:() => openFeas(l.url.slice(6))}, l.label)
@@ -2674,9 +2676,10 @@ function cloudVoiceSettings(){
 
 /* ---------------- identity: "تعرّف على نسيم" ---------------- */
 const APP = {
-  name: "نسيم", nameLatin: "NASEM AI", version: "إصدار 5.6 (تطبيق)",
+  name: "نسيم", nameLatin: "NASEM AI", version: "إصدار 5.7 (تطبيق)",
   updated: "2026-11-25",
   changes: [
+    "🔘 الشات مربوط بمفاتيح نسيم: اطلب أي ميزة بالكلام (البصمة، الجمعيات، الباك أب، المجسم…) يظهر زرارها ويتفتح على طول",
     "☀️ ملخص الصبح: إشعار كل يوم في ميعادك، تفتحه تسمع مواعيدك والمتأخر والدوا والأقساط والدولار",
     "📋 تقرير الموقع اليومي بالصوت: \"تقرير موقع QNB: …\" يطلع تقرير منظم PDF / Excel / واتساب، وملخص أسبوع لكل موقع",
     "🔔 زرار \"جرّب تذكير بعد دقيقتين\" عشان تتأكد إن الإشعارات بتوصل",
@@ -5467,6 +5470,68 @@ function siteSection(){
   }
   return box;
 }
+
+/* ================= 🔘 الشات ↔ مفاتيح نسيم: اطلب أي ميزة بالكلام، يظهر زرارها في الشات ويتفتح على طول ================= */
+const goSec = (tab, id) => () => { switchTab(tab); render(); setTimeout(() => { const el = document.getElementById(id); if (el) el.scrollIntoView({behavior: "smooth", block: "start"}); }, 120); };
+const lastBuild = () => (S.projects || []).find(p => p.build);
+const FEATURES = [
+  {k: "settings", icon: "⚙️", label: "الإعدادات", re: /^(ال)?(اعدادات|ضبط|سيتنج|settings)( نسيم)?$/, run: () => openSettings()},
+  {k: "bio", icon: "☝️", label: "البصمة وقفل نسيم", re: /^(ال)?(بصمه|قفل( نسيم| التطبيق)?|رقم (ال)?سري|فتح بالبصمه|قفل بالبصمه)$/, run: () => openBioSetup()},
+  {k: "backup", icon: "🗄️", label: "النسخة الاحتياطية", re: /^(ال)?(نسخه (ال)?احتياطيه|باك ?اب|backup|استرجاع( بياناتي)?|استرجع بياناتي)$/, run: () => openBackup()},
+  {k: "call", icon: "📞", label: "مكالمة مع نسيم", re: /^(ال)?(مكالمه|وضع المكالمه|كلمني|اتصل( بيا)?|نتكلم( صوت)?)$/, run: () => openCall()},
+  {k: "about", icon: "✨", label: "الإصدار والتحديث", re: /^(ال)?(اصدار|اصدار نسيم|تحديث|تحديث نسيم|التحديثات|الجديد|ايه الجديد|عن نسيم|رقم الاصدار)$/, run: () => openAbout()},
+  {k: "examples", icon: "💡", label: "أقدر أقول إيه", re: /^(ال)?(امثله|اوامر( نسيم)?|مفاتيح( نسيم)?|اقدر اقول ايه|بتعمل ايه)$/, run: () => openSayAll()},
+  {k: "report", icon: "📄", label: "تقرير الشهر", re: /^(ال)?(تقرير (ال)?شهر|تقرير شهري|تقرير فلوسي|تقرير مصاريف( ال)?شهر)$/, run: () => openReport()},
+  {k: "notify", icon: "🔔", label: "التذكيرات والإشعارات", re: /^(ال)?(اشعارات|تذكيرات|جرب (ال)?تذكير|تجربه (ال)?تذكير|ملخص (ال)?صبح (شغال|اعدادات))$/, run: () => { openSettings(); setTimeout(() => { const e = [...document.querySelectorAll(".pref-label")].find(x => /تذكيرات توصلك/.test(x.textContent)); if (e) e.scrollIntoView({block: "center"}); }, 150); }},
+  {k: "feas", icon: "📊", label: "دراسات الجدوى", re: /^(ال)?(دراسات (ال)?جدوي|جدوي|اقترح مشروع)$/, run: () => openFeasHome("suggest")},
+  {k: "build", icon: "📐", label: "مقايسة البناء", re: /^(ال)?(مقايسه|مقايسه (ال)?بنا|تكلفه (ال)?بنا|حساب (تكلفه )?(ال)?بنا)$/, run: () => { const p = lastBuild(); if (p) openBuild(p.id); else toast("اكتب مثلاً: بناء منزل 100 متر دورين"); }},
+  {k: "3d", icon: "🧊", label: "المجسم 3D", re: /^(ال)?(مجسم|مجسم (ال)?بيت|3d|ثري دي|تصميم 3d|(ال)?تصميم (ال)?ثلاثي)$/, run: () => { const p = lastBuild(); if (p) open3D(p, null); else toast("اعمل مقايسة الأول: بناء منزل 100 متر دورين"); }},
+  {k: "tab-approvals", icon: "✅", label: "الموافقات", re: /^(ال)?موافقات$/, run: () => { switchTab("approvals"); render(); }},
+  {k: "tab-memory", icon: "💡", label: "ذاكرتي", re: /^(ذاكرتي|(ال)?ذاكره|(ال)?معلومات)$/, run: () => { switchTab("memory"); render(); }},
+  {k: "tab-money", icon: "💳", label: "فلوسي", re: /^(فلوسي|(ال)?فلوس)$/, run: () => { switchTab("money"); render(); }},
+  {k: "tab-tasks", icon: "📅", label: "التزاماتي", re: /^(التزاماتي|(ال)?التزامات|مواعيدي|(ال)?مهام)$/, run: () => { switchTab("tasks"); render(); }},
+  {k: "tab-studio", icon: "✨", label: "الاستوديو", re: /^(ال)?استوديو$/, run: () => { switchTab("studio"); render(); }},
+  {k: "acc", icon: "📒", label: "الحسابات (العملاء والموردين)", re: /^(ال)?(حسابات|حساب (ال)?عملاء|(ال)?عملاء|(ال)?موردين|(ال)?عملاء و(ال)?موردين|دفتر (ال)?حسابات)$/, run: goSec("money", "sec-acc")},
+  {k: "gam", icon: "🤝", label: "الجمعيات", re: /^(ال)?(جمعيات|جمعيه|جمعيتي)$/, run: goSec("money", "sec-gam")},
+  {k: "loans", icon: "💵", label: "السلف", re: /^(ال)?(سلف|ديون|قروض)$/, run: goSec("money", "sec-loans")},
+  {k: "spend", icon: "💸", label: "المصروف", re: /^(ال)?(مصروف|مصاريف|مصاريفي|مصروفاتي)$/, run: goSec("money", "sec-spend")},
+  {k: "market", icon: "📈", label: "نبض السوق", re: /^(ال)?(نبض (ال)?سوق|(ال)?سوق|اسعار (ال)?سوق)$/, run: goSec("money", "sec-market")},
+  {k: "proj", icon: "🏗️", label: "تكلفة مشروعك", re: /^(ال)?(مشروعي|مشاريعي|تكلفه مشروعي|تكلفه (ال)?مشروع)$/, run: goSec("money", "sec-proj")},
+  {k: "crafts", icon: "🔧", label: "الصنايعية", re: /^(ال)?(صنايعيه|صنايعي|حرفيين)$/, run: goSec("memory", "sec-crafts")},
+  {k: "family", icon: "👨‍👩‍👧", label: "العيلة", re: /^(ال)?(عيله|عيلتي|اسره|اسرتي)$/, run: goSec("memory", "sec-family")},
+  {k: "invite", icon: "➕", label: "ضيف حد من العيلة", re: /^(ضيف|اضيف|ادعي|دعوه)( حد)?( من| ل| لل)? ?(ال)?(عيله|عيلتي)$/, run: () => openFamilyInvite()},
+  {k: "sites", icon: "📋", label: "تقارير المواقع", re: /^(ال)?(تقارير (ال)?مواقع|تقرير (ال)?موقع|(ال)?مواقع)$/, run: goSec("tasks", "sec-sites")},
+  {k: "meds", icon: "💊", label: "الأدوية", re: /^(ال)?(ادويه|ادويتي|دوا|علاج)$/, run: () => { switchTab("tasks"); render(); }},
+  {k: "write", icon: "✍️", label: "اكتبلي", re: /^(اكتبلي|اكتب لي|اكتب)( بوست| اعلان| رد| رساله)?$/, run: () => openStudioForm("write")},
+  {k: "cv", icon: "📄", label: "سيرتي الذاتية", re: /^(ال)?(سيره (ال)?ذاتيه|سيرتي (ال)?ذاتيه|cv|سي في)$/, run: () => openStudioForm("cv")},
+  {k: "deck", icon: "📊", label: "اعمللي عرض", re: /^(ال)?(عرض تقديمي|عرض|باوربوينت|بوربوينت|بريزنتيشن|presentation)$/, run: () => openStudioForm("deck")},
+  {k: "design", icon: "🎨", label: "صمملي", re: /^((صمملي|صمم لي|صمم|تصميم)( (لوجو|شعار|بوست|ستوري|بوستر|غلاف|اعلان))?|لوجو|شعار|ستوري|بوستر)$/, run: () => openStudioForm("design")},
+  {k: "page", icon: "🌐", label: "صفحة لمشروعي", re: /^(ال)?(صفحه( لمشروعي| ويب)?|موقع لمشروعي|لاندنج|لاندنج بيدج)$/, run: () => openStudioForm("page")},
+  {k: "setup", icon: "🧭", label: "إعداد نسيم من الأول", re: /^(اعداد نسيم|ظبط نسيم|اعداد سريع|ابدا من الاول)$/, run: () => openQuickSetup()},
+];
+const FEAT_OPENER = /^(?:(?:يا )?نسيم\s+)?(?:لو سمحت\s+|من فضلك\s+)?(?:افتح(?:لي)?|افتحلي|وريني|ورينى|ورّيني|اظهر(?:لي)?|اظهرلي|عايز|عاوز|محتاج|عايزه|وديني|ودّيني|روح(?:لي)?(?:\s+علي)?|خدني(?:\s+علي)?|فين|شغل(?:لي)?|فعل(?:لي)?|فعّل|اعمل(?:لي)?|ابدا|هات(?:لي)?|ادخل(?:\s+علي)?|دخلني(?:\s+علي)?)\s+/;
+function matchFeatures(text){
+  const n0 = arNorm(clean(text)).replace(/\s+/g, " ").trim();
+  if (!n0 || n0.length > 60) return [];
+  const opener = FEAT_OPENER.test(n0);
+  let core = n0;
+  for (let i = 0; i < 3; i++) core = core.replace(FEAT_OPENER, "").replace(/^(اشوف|اعمل|افتح|اجرب|اضبط|اظبط|ادخل|افعل|اشغل|استخدم|اغير|اعدل)\s+/, "");
+  core = core.replace(/^(صفحه|شاشه|قسم|تاب|زرار|مفتاح)\s+/, "");
+  for (let i = 0; i < 3; i++) core = core.replace(/\s+(لو سمحت|من فضلك|بتاعتي|بتاعي|بتاع نسيم|يا نسيم|دلوقتي|حالا|بسرعه|لبياناتي|لبيانات نسيم|في نسيم)$/, "");
+  core = core.trim();
+  if (!core || core.split(" ").length > 5) return [];
+  if (!opener && /(فكرني|ذكرني|بكره|الساعه|امبارح|\d)/.test(core)) return [];
+  return FEATURES.filter(f => f.re.test(core));
+}
+function localFeature(text){
+  const hits = matchFeatures(text); if (!hits.length) return null;
+  if (hits.length === 1){
+    const f = hits[0]; setTimeout(() => { try{ f.run(); }catch(e){ console.warn(e); } }, 350);
+    return {text: `فتحتلك ${f.icon} ${f.label} 👇`, links: [{label: `${f.icon} ${f.label}`, url: "#feat:" + f.k}]};
+  }
+  return {text: "تقصد أنهي واحدة؟", links: hits.slice(0, 4).map(f => ({label: `${f.icon} ${f.label}`, url: "#feat:" + f.k}))};
+}
+function runFeature(k){ const f = FEATURES.find(x => x.k === k); if (f) f.run(); }
 
 /* ---------------- misc ---------------- */
 let toastTimer;
