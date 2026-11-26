@@ -642,6 +642,7 @@
     let c = {}; try { c = JSON.parse(localStorage.getItem(TTS_KEY) || "{}"); } catch (e) {}
     const out = { ...TTS_DEFAULTS, ...c };
     if (!c.provider && getConfig().gemini.key) out.provider = "gemini";   // never chosen -> the human voice
+    else if (!c.provider && managedServer() && getGW().access) out.provider = "server";   // owner's server has the Egyptian voice for every phone (iPhone too)
     return out;
   }
   function setTTS(c) { localStorage.setItem(TTS_KEY, JSON.stringify(c)); }
@@ -735,7 +736,7 @@
     enabled() {
       const c = getTTS();
       if (!player) return false;
-      if (c.provider === "server") return !!getGW().access;
+      if (c.provider === "server") { const off = +localStorage.getItem("nasem-srv-tts-off") || 0; return !!getGW().access && Date.now() - off > 6 * 3600e3; }
       if (c.provider === "gemini") return !!getConfig().gemini.key;
       return c.provider === "azure" && !!c.azureKey && !!c.azureRegion;
     },
@@ -763,6 +764,7 @@
         url = audioCache.get(key);
         if (!url) {
           const res = await gwPost("/v1/gateway/tts", { text: text.slice(0, 2000), lang, voice, rate: Math.min(2, Math.max(0.5, rate)) });
+          if (res.status === 503) { try { localStorage.setItem("nasem-srv-tts-off", String(Date.now())); } catch (e) {} }   // not set up yet: stop asking for a while
           if (!res.ok) throw err(res.status === 503 ? "tts_not_configured" : "upstream_error");
           url = URL.createObjectURL(await res.blob()); audioCache.set(key, url);
         }
