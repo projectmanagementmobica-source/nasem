@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from typing import Any
 from collections.abc import Callable
 from datetime import UTC, datetime
 from xml.sax.saxutils import escape
@@ -137,13 +138,79 @@ class GatewayService:
         return ImageResponse(request_id=request_id, status="error",
                              error=ProcessingError(code="llm_unavailable", message=str(last), retryable=last.retryable))
 
-    async def tts(self, user_id: uuid.UUID, req: TtsRequest) -> bytes:
+    async def tts(self, user_id: uuid.UUID, req: TtsRequest) -> tuple[bytes, str]:
         key = settings.azure_speech_key
-        if key is None or not key.get_secret_value().strip() or not settings.azure_speech_region:
+        azure_ok = key is not None and bool(key.get_secret_value().strip()) and bool(settings.azure_speech_region)
+        gem = settings.gemini_api_key
+        gemini_ok = gem is not None and bool(gem.get_secret_value().strip())
+        if not azure_ok and not gemini_ok:
             raise AppError(503, "tts_not_configured", "Egyptian voice is not configured on the server")
         used = await self._count(user_id, "tts", len(req.text))
         if used > settings.gateway_daily_requests_per_user:
             raise AppError(429, "daily_limit", "daily voice limit reached")
+        if not azure_ok:
+            return await self._gemini_tts(req)
+        try:
+            return await self._azure_tts(req, key), "audio/mpeg"   # type: ignore[arg-type]
+        except AppError:
+            if gemini_ok:
+                return await self._gemini_tts(req)
+            raise
+
+    async def _gemini_tts(self, req: TtsRequest) -> tuple[bytes, str]:
+        """Free Gemini speech models; Egyptian dialect is asked for in the prompt. PCM is wrapped as WAV."""
+        import base64, re as _re, struct
+        key = settings.gemini_api_key.get_secret_value()   # type: ignore[union-attr]
+        male = bool(req.voice) and any(x in req.voice for x in ("Shakir", "Guy", "Ryan"))
+        voice = "Charon" if male else "Kore"
+        if req.lang == "en":
+            style = "Read this naturally and warmly"
+        else:
+            style = "اقرا الكلام ده بصوت طبيعي ودافي باللهجة المصرية العامية، زي واحد مصري بيكلم صاحبه"
+        if req.rate < 0.95:
+            style += ("، وبراحة شوية" if req.lang != "en" else ", a little slowly")
+        elif req.rate > 1.05:
+            style += ("، وبسرعة شوية" if req.lang != "en" else ", a little fast")
+        payload = {
+            "contents": [{"role": "user", "parts": [{"text": f"{style}:\n{req.text}"}]}],
+            "generationConfig": {"responseModalities": ["AUDIO"],
+                                 "speechConfig": {"voiceConfig": {"prebuiltVoiceConfig": {"voiceName": voice}}}},
+        }
+        http = self._http or httpx.AsyncClient(timeout=45)
+        last = 0
+        try:
+            for model in settings.gemini_tts_models:
+                try:
+                    res = await http.post(
+                        f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+                        headers={"x-goog-api-key": key}, json=payload)
+                except httpx.HTTPError:
+                    continue
+                last = res.status_code
+                if res.status_code != 200:
+                    continue
+                parts = (((res.json().get("candidates") or [{}])[0].get("content") or {}).get("parts") or [])
+                inl = next((p.get("inlineData") or p.get("inline_data") for p in parts
+                            if p.get("inlineData") or p.get("inline_data")), None)
+                if not inl or not inl.get("data"):
+                    continue
+                raw = base64.b64decode(inl["data"])
+                mt = str(inl.get("mimeType") or inl.get("mime_type") or "").lower()
+                if any(x in mt for x in ("wav", "mpeg", "mp3", "ogg")):
+                    return raw, mt.split(";")[0]
+                m = _re.search(r"rate=(\d+)", mt)
+                hz = int(m.group(1)) if m else 24000
+                head = b"RIFF" + struct.pack("<I", 36 + len(raw)) + b"WAVEfmt " + struct.pack(
+                    "<IHHIIHH", 16, 1, 1, hz, hz * 2, 2, 16) + b"data" + struct.pack("<I", len(raw))
+                return head + raw, "audio/wav"
+        finally:
+            if self._http is None:
+                await http.aclose()
+        if last == 429:
+            raise AppError(429, "daily_limit", "free voice quota used up for today")
+        raise AppError(502, "tts_failed", f"voice service error {last}")
+
+    async def _azure_tts(self, req: TtsRequest, key: Any) -> bytes:
         voice = req.voice or DEFAULT_VOICE[req.lang]
         pct = round((req.rate - 1) * 100)
         ssml = (

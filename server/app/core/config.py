@@ -68,6 +68,8 @@ class Settings(BaseSettings):
     gateway_daily_images_per_user: int = 20
     azure_speech_key: SecretStr | None = None
     azure_speech_region: str = ""
+    gemini_tts_models: list[str] = ["gemini-3.1-flash-tts-preview", "gemini-2.5-flash-preview-tts",
+                                    "gemini-3.8-flash-lite-tts", "gemini-3.8-flash-tts"]
     cors_origins: list[str] = []
 
     # --- Access control: the owner approves who may use Nasem ---

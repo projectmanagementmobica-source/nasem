@@ -69,6 +69,6 @@ async def tts(
     session: AsyncSession = Depends(get_session),
     providers: dict[str, Provider] = Depends(get_providers),
 ) -> Response:
-    """Egyptian (Salma / Shakir) or English neural voice. The Azure key stays on the server."""
-    audio = await GatewayService(session, providers).tts(user.id, body)
-    return Response(content=audio, media_type="audio/mpeg", headers={"Cache-Control": "no-store"})
+    """Egyptian voice: Azure (Salma / Shakir) when configured, else free Gemini speech. Keys stay on the server."""
+    audio, media_type = await GatewayService(session, providers).tts(user.id, body)
+    return Response(content=audio, media_type=media_type, headers={"Cache-Control": "no-store"})
