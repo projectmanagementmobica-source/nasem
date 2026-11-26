@@ -2677,9 +2677,10 @@ function cloudVoiceSettings(){
 
 /* ---------------- identity: "تعرّف على نسيم" ---------------- */
 const APP = {
-  name: "نسيم", nameLatin: "NASEM AI", version: "إصدار 5.8 (تطبيق)",
+  name: "نسيم", nameLatin: "NASEM AI", version: "إصدار 5.9 (تطبيق)",
   updated: "2026-11-25",
   changes: [
+    "🏗️ التصميم الإنشائي والمقايسة بقوا ليهم مربعات في الاستوديو، وتقدر تقول \"فين اللوحة الإنشائية\"",
     "🏗️ التصميم الإنشائي المبدئي: ابعت أبعاد الأرض، يطلع لوحة أعمدة وقواعد ولوحة سقف بجداول التسليح (PDF A3)، وصورة الواجهة، وفيديو برّه وجوه",
     "🔘 الشات مربوط بمفاتيح نسيم: اطلب أي ميزة بالكلام (البصمة، الجمعيات، الباك أب، المجسم…) يظهر زرارها ويتفتح على طول",
     "☀️ ملخص الصبح: إشعار كل يوم في ميعادك، تفتحه تسمع مواعيدك والمتأخر والدوا والأقساط والدولار",
@@ -3472,8 +3473,10 @@ function openStudioForm(kind){
 function renderStudio(){
   const p = document.getElementById("panel-studio"); p.replaceChildren();
   p.append(h("div",{class:"empty", style:"padding-top:12px"}, h("h2",{}, "استوديو نسيم"), h("p",{}, "بيعرف عنك، فبيطلّع حاجات على مقاسك. أو اطلبها في الشات: \"اعمللي بوست عن...\".")),
-    h("div",{class:"studio-grid"}, Object.entries(STUDIO).map(([k, v]) => h("button",{class:"studio-tile", onclick:() => openStudioForm(k)},
-      h("span",{class:"studio-icon"}, v.icon), h("b",{}, v.label), h("small",{}, v.desc)))));
+    h("div",{class:"studio-grid"}, ...Object.entries(STUDIO).map(([k, v]) => h("button",{class:"studio-tile", onclick:() => openStudioForm(k)},
+      h("span",{class:"studio-icon"}, v.icon), h("b",{}, v.label), h("small",{}, v.desc))),
+      h("button",{class:"studio-tile", onclick:() => openStructNew()}, h("span",{class:"studio-icon"}, "🏗️"), h("b",{}, "تصميم إنشائي لأرضك"), h("small",{}, "لوحة أعمدة وقواعد وسقف، وواجهة، وفيديو")),
+      h("button",{class:"studio-tile", onclick:() => { const pb = lastBuild(); if (pb) openBuild(pb.id); else openStructNew(); }}, h("span",{class:"studio-icon"}, "📐"), h("b",{}, "مقايسة وتكلفة البناء"), h("small",{}, "كميات وأسعار النهاردة وتصميم ومجسم 3D"))));
   const recent = S.messages.filter(m => m.studio).slice(-6).reverse();
   if (recent.length) p.append(h("div",{class:"section-title"}, "آخر شغل"), h("div",{class:"list"}, recent.map(studioCard)));
 }
@@ -5670,6 +5673,22 @@ function openStruct(id){
     h("div",{class: "row"}, h("button",{class: "btn ghost", onclick: () => openBuild(p.id)}, "📐 المقايسة"), h("button",{class: "btn ghost", onclick: () => { structOpenId = null; closeSheet(); }}, "تمام")));
   sheetBack.hidden = false;
 }
+/* the structural tool without typing a sentence: plot width, depth, floors → sheets */
+function openStructNew(){
+  const num = (ph, v) => h("input",{class: "voice-select", type: "number", inputmode: "decimal", dir: "ltr", placeholder: ph, value: v || ""});
+  const w = num("عرض الأرض (م)"), l = num("عمق الأرض (م)"), n = num("عدد الأدوار", "2"), fr = num("ردّ أمامي (م)", ""), bk = num("ردّ خلفي (م)", "");
+  const needs = h("textarea",{class: "voice-select", rows: "2", placeholder: "احتياجاتك (اختياري): شقة لكل دور، 3 أوض، جراج…"});
+  const list = (S.projects || []).filter(p => p.build);
+  sheet.replaceChildren(h("h2",{id: "sheetTitle"}, "🏗️ تصميم إنشائي لأرضك"),
+    h("div",{class: "row", style: "flex-wrap:wrap;gap:6px"}, w, l, n, fr, bk), needs,
+    h("button",{class: "btn primary", onclick: () => {
+      if (!(+w.value > 3 && +l.value > 3)){ toast("اكتب عرض وعمق الأرض بالمتر."); return; }
+      const t = `عندي أرض ${+w.value} في ${+l.value} تصميم انشائي ${Math.max(1, +n.value || 2)} ادوار` + (+fr.value ? ` ردود امامي ${+fr.value}` : "") + (+bk.value ? ` ردود خلفي ${+bk.value}` : "") + (needs.value.trim() ? " " + needs.value.trim() : "");
+      closeSheet(); const r = localStruct(t); if (r){ S.messages.push({id: uid(), role: "agent", text: r.text, links: r.links, at: nowISO(), local: true}); store.save(); render(); } }}, "🏗️ اعمل اللوحات"),
+    list.length ? h("div",{}, h("div",{class: "sub", style: "margin-top:8px"}, "أو افتح لوحات مشروع قديم:"), h("div",{class: "chips"}, list.slice(0, 6).map(p => h("button",{class: "chip", onclick: () => openStruct(p.id)}, p.name)))) : null,
+    h("div",{class: "row"}, h("button",{class: "btn ghost", onclick: closeSheet}, "إلغاء")));
+  sheetBack.hidden = false;
+}
 function parseStruct(text){
   const n = arNorm(clean(text));
   if (!/(تصميم انشائي|لوحه انشائيه|لوحات انشائيه|انشائي|قطعه ارض|عندي ارض|ارض مساحتها|ارض ابعادها)/.test(n)) return null;
@@ -5706,7 +5725,7 @@ const FEATURES = [
   {k: "notify", icon: "🔔", label: "التذكيرات والإشعارات", re: /^(ال)?(اشعارات|تذكيرات|جرب (ال)?تذكير|تجربه (ال)?تذكير|ملخص (ال)?صبح (شغال|اعدادات))$/, run: () => { openSettings(); setTimeout(() => { const e = [...document.querySelectorAll(".pref-label")].find(x => /تذكيرات توصلك/.test(x.textContent)); if (e) e.scrollIntoView({block: "center"}); }, 150); }},
   {k: "feas", icon: "📊", label: "دراسات الجدوى", re: /^(ال)?(دراسات (ال)?جدوي|جدوي|اقترح مشروع)$/, run: () => openFeasHome("suggest")},
   {k: "build", icon: "📐", label: "مقايسة البناء", re: /^(ال)?(مقايسه|مقايسه (ال)?بنا|تكلفه (ال)?بنا|حساب (تكلفه )?(ال)?بنا)$/, run: () => { const p = lastBuild(); if (p) openBuild(p.id); else toast("اكتب مثلاً: بناء منزل 100 متر دورين"); }},
-  {k: "struct", icon: "🏗️", label: "التصميم الإنشائي", re: /^(ال)?(تصميم (ال)?انشائي|لوحه (ال)?انشائيه|لوحات (ال)?انشائيه|(ال)?انشائي)$/, run: () => { const p = lastBuild(); if (p) openStruct(p.id); else toast("ابعت أبعاد الأرض: عندي أرض 12 في 20 عايز تصميم إنشائي دورين"); }},
+  {k: "struct", icon: "🏗️", label: "التصميم الإنشائي", re: /^(ال)?(تصميم (ال)?انشائي|لوح(ه|ات) (ال)?انشائي(ه)?|(ال)?انشائي|لوح(ه|ات) (ال)?انشاء|اللوحات)$/, run: () => { const p = lastBuild(); if (p) openStruct(p.id); else openStructNew(); }},
   {k: "3d", icon: "🧊", label: "المجسم 3D", re: /^(ال)?(مجسم|مجسم (ال)?بيت|3d|ثري دي|تصميم 3d|(ال)?تصميم (ال)?ثلاثي)$/, run: () => { const p = lastBuild(); if (p) open3D(p, null); else toast("اعمل مقايسة الأول: بناء منزل 100 متر دورين"); }},
   {k: "tab-approvals", icon: "✅", label: "الموافقات", re: /^(ال)?موافقات$/, run: () => { switchTab("approvals"); render(); }},
   {k: "tab-memory", icon: "💡", label: "ذاكرتي", re: /^(ذاكرتي|(ال)?ذاكره|(ال)?معلومات)$/, run: () => { switchTab("memory"); render(); }},
